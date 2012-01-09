@@ -11,7 +11,7 @@ Build-Depends: cdbs (>= 0.4.42),
                erlang-inets,
                erlang-xmerl,
                help2man,
-               libcurl4-openssl-dev,
+               libcurl-dev,
                libicu-dev,
                libmozjs185-dev,
                libreadline-dev
