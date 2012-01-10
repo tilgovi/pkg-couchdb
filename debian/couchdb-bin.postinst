@@ -22,8 +22,6 @@ case $1 in
             false
         fi
         chown -R couchdb:couchdb /etc/couchdb
-        chown -R couchdb:couchdb /var/lib/couchdb
-        chown -R couchdb:couchdb /var/log/couchdb
         ;;
 esac
 

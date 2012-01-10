@@ -17,8 +17,7 @@ Build-Depends: cdbs (>= 0.4.42),
                libreadline-dev
 Homepage: http://couchdb.apache.org/
 
-Package: couchdb
-Architecture: any
+Package: couchdb-bin
 Depends: adduser,
          erlang-base-hipe | erlang-base | ${erlang-abi:Depends},
          libjs-jquery (>= 1.4.2),
@@ -31,7 +30,29 @@ Depends: adduser,
          ${erlang:Depends},
          ${misc:Depends},
          ${shlibs:Depends}
-Description: RESTful document oriented database
+Suggests: couchdb
+Architecture: any
+Description: RESTful document oriented database, programs
+ Apache CouchDB is a distributed, fault-tolerant and schema-free
+ document-oriented database accessible via a RESTful HTTP/JSON API. Among other
+ features, it provides robust, incremental replication with bi-directional
+ conflict detection and resolution, and is queryable and indexable using a
+ table-oriented view engine with JavaScript acting as the default view
+ definition language.
+ .
+ This package contains the database program (so one can run personal servers),
+ but no system database or "init" startup files.  To get those, you need the
+ "couchdb" package.
+ .
+ CouchDB is written in Erlang, but can be easily accessed from any environment
+ that provides means to make HTTP requests. There are a multitude of third-party
+ client libraries that make this even easier for a variety of programming
+ languages and environments.
+
+Package: couchdb
+Architecture: all
+Depends: couchdb-bin (>= ${binary:Version}), ${misc:Depends}, adduser
+Description: RESTful document oriented database, system DB
  Apache CouchDB is a distributed, fault-tolerant and schema-free
  document-oriented database accessible via a RESTful HTTP/JSON API. Among other
  features, it provides robust, incremental replication with bi-directional

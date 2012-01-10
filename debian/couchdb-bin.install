@@ -1,0 +1,3 @@
+debian/tmp/usr
+debian/tmp/etc/couchdb/default.ini
+debian/tmp/etc/couchdb/default.d
