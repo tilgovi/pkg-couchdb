@@ -1,0 +1,8 @@
+force-reload.patch
+couchdb_own_rundir.patch
+logrotate_as_couchdb.patch
+couchdb_sighup.patch
+wait_for_couchdb_stop.patch
+improve_parsing_of_mochiweb_relative_paths.patch
+improve_script_url_validation.patch
+include_a_comment_before_jsonp_output.patch

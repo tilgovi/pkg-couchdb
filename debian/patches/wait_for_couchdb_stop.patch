@@ -1,0 +1,30 @@
+Description: Wait for complete stop of CouchDB
+ Check if CouchDB is already stopped and wait for a second if not before
+ checking again.
+ .
+Author: Laszlo Boszormenyi (GCS) <gcs@debian.hu>
+Bug-Debian: http://bugs.debian.org/692295
+Last-Update: <2012-11-20>
+
+---
+
+--- couchdb-1.2.0.orig/etc/init/couchdb.tpl.in
++++ couchdb-1.2.0/etc/init/couchdb.tpl.in
+@@ -102,6 +102,17 @@ stop_couchdb () {
+     # Stop the running Apache CouchDB process.
+ 
+     run_command "$COUCHDB -d" > /dev/null
++    RET=1;
++    for i in $(seq 1 30); do
++        status=`$COUCHDB -s 2>/dev/null | grep -c process`;
++        if [ "$status" -eq 0 ]; then
++            RET=0;
++            break;
++        fi;
++        echo -n .;
++        sleep 1s;
++    done;
++    return $RET
+ }
+ 
+ display_status () {

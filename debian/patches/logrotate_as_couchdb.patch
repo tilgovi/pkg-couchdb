@@ -1,0 +1,16 @@
+Description: Use logrotate as couchdb user
+ Use su and create to make logfiles owned by couchdb
+Author: Laszlo Boszormenyi (GCS) <gcs@debian.hu>
+Bug-Debian: http://bugs.debian.org/652172
+Last-Update: 2012-11-18
+---
+
+--- couchdb-1.2.0.orig/etc/logrotate.d/couchdb.tpl.in
++++ couchdb-1.2.0/etc/logrotate.d/couchdb.tpl.in
+@@ -6,4 +6,6 @@
+        compress
+        notifempty
+        missingok
++       su couchdb couchdb
++       create 0640 couchdb couchdb
+ }

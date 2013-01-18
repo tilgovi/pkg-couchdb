@@ -1,0 +1,40 @@
+Description: improve parsing of mochiweb relative paths
+ Patch adapted from http://www.couchbase.com/issues/browse/MB-7390
+Author: Sriram Melkote <siri@couchbase.com>
+Bug-Debian: http://bugs.debian.org/698439
+Last-Update: 2012-12-15
+
+---
+
+diff --git a/src/mochiweb/mochiweb_util.erl b/src/mochiweb/mochiweb_util.erl
+index 3b50fe7..6b88818 100644
+--- a/src/mochiweb/mochiweb_util.erl
++++ b/src/mochiweb/mochiweb_util.erl
+@@ -68,11 +68,17 @@ partition2(_S, _Sep) ->
+ %% @spec safe_relative_path(string()) -> string() | undefined
+ %% @doc Return the reduced version of a relative path or undefined if it
+ %%      is not safe. safe relative paths can be joined with an absolute path
+-%%      and will result in a subdirectory of the absolute path.
++%%      and will result in a subdirectory of the absolute path. Safe paths
++%%      never contain a backslash character.
+ safe_relative_path("/" ++ _) ->
+     undefined;
+ safe_relative_path(P) ->
+-    safe_relative_path(P, []).
++    case string:chr(P, $\\) of
++        0 ->
++           safe_relative_path(P, []);
++        _ ->
++           undefined
++    end.
+ 
+ safe_relative_path("", Acc) ->
+     case Acc of
+@@ -809,6 +815,7 @@ safe_relative_path_test() ->
+     undefined = safe_relative_path("../foo"),
+     undefined = safe_relative_path("foo/../.."),
+     undefined = safe_relative_path("foo//"),
++    undefined = safe_relative_path("foo\\bar"),
+     ok.
+ 
+ parse_qvalues_test() ->

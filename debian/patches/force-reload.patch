@@ -1,0 +1,21 @@
+diff -Nur couchdb-1.0.2.orig//etc/init/couchdb.tpl.in couchdb-1.0.2/etc/init/couchdb.tpl.in
+--- couchdb-1.0.2.orig//etc/init/couchdb.tpl.in	2010-03-13 13:58:07.000000000 +0100
++++ couchdb-1.0.2/etc/init/couchdb.tpl.in	2011-06-05 05:37:19.056697586 +0200
+@@ -129,7 +129,7 @@
+                 log_end_msg $SCRIPT_ERROR
+             fi
+             ;;
+-        restart)
++        restart|force-reload)
+             log_daemon_msg "Restarting $DESCRIPTION" $NAME
+             if stop_couchdb; then
+                 if start_couchdb; then
+@@ -146,7 +146,7 @@
+             ;;
+         *)
+             cat << EOF >&2
+-Usage: $SCRIPT_NAME {start|stop|restart|status}
++Usage: $SCRIPT_NAME {start|stop|restart|force-reload|status}
+ EOF
+             exit $SCRIPT_ERROR
+             ;;

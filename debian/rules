@@ -1,0 +1,53 @@
+#!/usr/bin/make -f
+
+# Copyright 2009, Noah Slater <nslater@tumbolia.org>
+
+# Copying and distribution of this file, with or without modification, are
+# permitted in any medium without royalty provided the copyright notice and this
+# notice are preserved.
+
+include /usr/share/cdbs/1/rules/buildcore.mk
+include /usr/share/cdbs/1/rules/debhelper.mk
+include /usr/share/cdbs/1/class/autotools.mk
+
+#DEB_CONFIGURE_EXTRA_FLAGS = --enable-js-trunk
+DEB_INSTALL_DOCS_ALL =
+DEB_DH_INSTALLINIT_ARGS = --onlyscripts
+
+LIB = ${localstatedir}/lib/\$${package_identifier}
+
+# @@ workaround for #486848
+binary-arch binary-indep: build
+
+post-patches::
+	sed -i s,$(LIB)$$,$(LIB)/$(DEB_UPSTREAM_VERSION), configure
+	sed -i s,VERSION=%VERSION%$$,VERSION=$(DEB_UPSTREAM_VERSION), debian/postrm
+
+cleanbuilddir::
+	sed -i s,$(LIB)/$(DEB_UPSTREAM_VERSION)$$,$(LIB), configure
+	sed -i s,VERSION=$(DEB_UPSTREAM_VERSION)$$,VERSION=%VERSION%, debian/postrm
+
+common-binary-post-install-arch::
+	rm -r debian/couchdb/var/run
+	rm -f debian/couchdb/usr/share/doc/couchdb/LICENSE.gz
+	rm -f debian/couchdb/usr/share/doc/couchdb/INSTALL.*
+	rm -f debian/couchdb/usr/lib/couchdb/erlang/lib/couch-*/priv/lib/couch_erl_driver.la
+	rm -f debian/couchdb/usr/share/couchdb/www/script/jquery.js
+	rm -f debian/couchdb/usr/share/couchdb/www/script/jquery.form.js
+	chmod a-x debian/couchdb/usr/share/couchdb/server/main.js \
+		debian/couchdb/usr/share/couchdb/server/main-coffee.js
+	sed -i "/dependency_libs/ s/'.*'/''/" `find debian/couchdb -name '*.la'`
+	dh_link /usr/share/javascript/jquery/jquery.js /usr/share/couchdb/www/script/jquery.js
+	dh_link /usr/share/javascript/jquery-form/jquery.form.js /usr/share/couchdb/www/script/jquery.form.js
+
+common-binary-predeb-arch::
+	dh_fixperms debian/couchdb/
+	chmod 660 debian/couchdb/etc/couchdb/local.ini
+	chmod 750 debian/couchdb/var/lib/couchdb
+	chmod 750 debian/couchdb/var/log/couchdb
+	erlang-depends
+
+# @@ only works from source directory, see #494141
+.PHONY: get-orig-source
+get-orig-source:
+	uscan --force-download --rename --download-version=$(DEB_UPSTREAM_VERSION) --destdir .

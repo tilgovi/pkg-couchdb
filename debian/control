@@ -1,0 +1,45 @@
+Source: couchdb
+Section: misc
+Priority: optional
+Maintainer: Laszlo Boszormenyi (GCS) <gcs@debian.hu>
+Standards-Version: 3.9.3
+Build-Depends: cdbs (>= 0.4.42),
+               debhelper (>= 7.2.11),
+               erlang-crypto,
+               erlang-dev (>= 1:13.b.2.1),
+               erlang-eunit,
+               erlang-inets,
+               erlang-xmerl,
+               help2man,
+               libcurl4-openssl-dev,
+               libicu-dev,
+               libmozjs185-dev,
+               libreadline-dev
+Homepage: http://couchdb.apache.org/
+
+Package: couchdb
+Architecture: any
+Depends: adduser,
+         erlang-base-hipe | erlang-base | ${erlang-abi:Depends},
+         libjs-jquery (>= 1.4.2),
+         libjs-jquery-form (>= 2.36),
+         lsb-base,
+         procps,
+         ${erlang-crypto:Depends},
+         ${erlang-inets:Depends},
+         ${erlang-xmerl:Depends},
+         ${erlang:Depends},
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: RESTful document oriented database
+ Apache CouchDB is a distributed, fault-tolerant and schema-free
+ document-oriented database accessible via a RESTful HTTP/JSON API. Among other
+ features, it provides robust, incremental replication with bi-directional
+ conflict detection and resolution, and is queryable and indexable using a
+ table-oriented view engine with JavaScript acting as the default view
+ definition language.
+ .
+ CouchDB is written in Erlang, but can be easily accessed from any environment
+ that provides means to make HTTP requests. There are a multitude of third-party
+ client libraries that make this even easier for a variety of programming
+ languages and environments.
