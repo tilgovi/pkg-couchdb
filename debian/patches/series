@@ -1,8 +1,4 @@
-force-reload.patch
-couchdb_own_rundir.patch
-logrotate_as_couchdb.patch
-couchdb_sighup.patch
-wait_for_couchdb_stop.patch
-improve_parsing_of_mochiweb_relative_paths.patch
-improve_script_url_validation.patch
-include_a_comment_before_jsonp_output.patch
+0001-force-reload.patch
+0002-logrotate_as_couchdb.patch
+0003-couchdb_sighup.patch
+0004-wait_for_couchdb_stop.patch

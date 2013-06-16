@@ -1,0 +1,19 @@
+From: "Laszlo Boszormenyi (GCS)" <gcs@debian.hu>
+Date: Sun, 16 Jun 2013 16:27:23 -0700
+Subject: logrotate_as_couchdb
+
+---
+ etc/logrotate.d/couchdb.tpl.in | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/etc/logrotate.d/couchdb.tpl.in b/etc/logrotate.d/couchdb.tpl.in
+index 0bb07e1..81f2678 100644
+--- a/etc/logrotate.d/couchdb.tpl.in
++++ b/etc/logrotate.d/couchdb.tpl.in
+@@ -6,4 +6,6 @@
+        compress
+        notifempty
+        missingok
++       su couchdb couchdb
++       create 0640 couchdb couchdb
+ }

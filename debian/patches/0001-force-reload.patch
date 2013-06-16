@@ -1,7 +1,16 @@
-diff -Nur couchdb-1.0.2.orig//etc/init/couchdb.tpl.in couchdb-1.0.2/etc/init/couchdb.tpl.in
---- couchdb-1.0.2.orig//etc/init/couchdb.tpl.in	2010-03-13 13:58:07.000000000 +0100
-+++ couchdb-1.0.2/etc/init/couchdb.tpl.in	2011-06-05 05:37:19.056697586 +0200
-@@ -129,7 +129,7 @@
+From: "Laszlo Boszormenyi (GCS)" <gcs@debian.hu>
+Date: Sun, 16 Jun 2013 16:27:23 -0700
+Subject: force-reload
+
+---
+ etc/init/couchdb.tpl.in | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/etc/init/couchdb.tpl.in b/etc/init/couchdb.tpl.in
+index 39b6250..63aa4a5 100644
+--- a/etc/init/couchdb.tpl.in
++++ b/etc/init/couchdb.tpl.in
+@@ -132,7 +132,7 @@ parse_script_option_list () {
                  log_end_msg $SCRIPT_ERROR
              fi
              ;;
@@ -10,7 +19,7 @@ diff -Nur couchdb-1.0.2.orig//etc/init/couchdb.tpl.in couchdb-1.0.2/etc/init/cou
              log_daemon_msg "Restarting $DESCRIPTION" $NAME
              if stop_couchdb; then
                  if start_couchdb; then
-@@ -146,7 +146,7 @@
+@@ -149,7 +149,7 @@ parse_script_option_list () {
              ;;
          *)
              cat << EOF >&2
