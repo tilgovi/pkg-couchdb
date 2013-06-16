@@ -112,6 +112,16 @@ couchTests.users_db = function(debug) {
     }
     jchrisUserDoc.roles = [];
 
+    // "roles" must exist
+    delete jchrisUserDoc.roles;
+    try {
+      usersDb.save(jchrisUserDoc);
+      T(false && "should only allow us to save doc when roles exists");
+    } catch(e) {
+      T(e.reason == "doc.roles must exist");
+    }
+    jchrisUserDoc.roles = [];
+
     // character : is not allowed in usernames
     var joeUserDoc = CouchDB.prepareUserDoc({
       name: "joe:erlang"
@@ -122,6 +132,24 @@ couchTests.users_db = function(debug) {
     } catch(e) {
       TEquals("Character `:` is not allowed in usernames.", e.reason);
     }
+
+    // test that you can login as a user with a password starting with :
+    var doc = CouchDB.prepareUserDoc({
+      name: "foo@example.org"
+    }, ":bar");
+    T(usersDb.save(doc).ok);
+
+    T(CouchDB.session().userCtx.name == null);
+
+    // test that you can use basic auth aginst the users db
+    var s = CouchDB.session({
+      headers : {
+        //                 base64_encode("foo@example.org::bar")
+        "Authorization" : "Basic Zm9vQGV4YW1wbGUub3JnOjpiYXI="
+      }
+    });
+    T(s.userCtx.name == "foo@example.org");
+
   };
 
   usersDb.deleteDb();

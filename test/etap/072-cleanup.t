@@ -55,7 +55,7 @@ test() ->
     BoozRev = create_design_doc(<<"_design/booz">>, <<"baz">>),
     query_view("booz", "baz"),
 
-    {ok, Db} = couch_db:open(?TEST_DB, [{user_ctx, ?ADMIN_USER}]),
+    {ok, _Db} = couch_db:open(?TEST_DB, [{user_ctx, ?ADMIN_USER}]),
     view_cleanup(),
     etap:is(count_index_files(), 2,
         "Two index files before any deletions."),
@@ -116,11 +116,11 @@ query_view(DDoc, View) ->
 
 view_cleanup() ->
     {ok, Db} = couch_db:open(?TEST_DB, [{user_ctx, ?ADMIN_USER}]),
-    couch_view:cleanup_index_files(Db),
+    couch_mrview:cleanup(Db),
     couch_db:close(Db).
 
 count_index_files() ->
     % call server to fetch the index files
     RootDir = couch_config:get("couchdb", "view_index_dir"),
     length(filelib:wildcard(RootDir ++ "/." ++
-        binary_to_list(?TEST_DB) ++ "_design"++"/*")).
+        binary_to_list(?TEST_DB) ++ "_design"++"/mrview/*")).

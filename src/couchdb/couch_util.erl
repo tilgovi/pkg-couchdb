@@ -17,7 +17,7 @@
 -export([rand32/0, implode/2, collate/2, collate/3]).
 -export([abs_pathname/1,abs_pathname/2, trim/1]).
 -export([encodeBase64Url/1, decodeBase64Url/1]).
--export([validate_utf8/1, to_hex/1, from_hex/1, parse_term/1, dict_find/3]).
+-export([validate_utf8/1, to_hex/1, parse_term/1, dict_find/3]).
 -export([get_nested_json_value/2, json_user_ctx/1]).
 -export([proplist_apply_field/2, json_apply_field/2]).
 -export([to_binary/1, to_integer/1, to_list/1, url_encode/1]).
@@ -27,6 +27,8 @@
 -export([reorder_results/2]).
 -export([url_strip_password/1]).
 -export([encode_doc_id/1]).
+-export([with_db/2]).
+-export([rfc1123_date/0, rfc1123_date/1]).
 
 -include("couch_db.hrl").
 
@@ -79,7 +81,7 @@ shutdown_sync(Pid) ->
     after
         erlang:demonitor(MRef, [flush])
     end.
-    
+
 
 simple_call(Pid, Message) ->
     MRef = erlang:monitor(process, Pid),
@@ -136,11 +138,6 @@ to_hex([H|T]) ->
 to_digit(N) when N < 10 -> $0 + N;
 to_digit(N)             -> $a + N-10.
 
-from_hex(Hex) when is_binary(Hex) ->
-    mochihex:to_bin(?b2l(Hex));
-from_hex(Hex) when is_list(Hex) ->
-    mochihex:to_bin(Hex).
-
 
 parse_term(Bin) when is_binary(Bin) ->
     parse_term(binary_to_list(Bin));
@@ -186,7 +183,7 @@ json_user_ctx(#db{name=DbName, user_ctx=Ctx}) ->
     {[{<<"db">>, DbName},
             {<<"name">>,Ctx#user_ctx.name},
             {<<"roles">>,Ctx#user_ctx.roles}]}.
-    
+
 
 % returns a random integer
 rand32() ->
@@ -434,3 +431,59 @@ encode_doc_id(<<"_local/", Rest/binary>>) ->
     "_local/" ++ url_encode(Rest);
 encode_doc_id(Id) ->
     url_encode(Id).
+
+
+with_db(Db, Fun) when is_record(Db, db) ->
+    Fun(Db);
+with_db(DbName, Fun) ->
+    case couch_db:open_int(DbName, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}]) of
+        {ok, Db} ->
+            try
+                Fun(Db)
+            after
+                catch couch_db:close(Db)
+            end;
+        Else ->
+            throw(Else)
+    end.
+
+rfc1123_date() ->
+    {{YYYY,MM,DD},{Hour,Min,Sec}} = calendar:universal_time(),
+    DayNumber = calendar:day_of_the_week({YYYY,MM,DD}),
+    lists:flatten(
+      io_lib:format("~s, ~2.2.0w ~3.s ~4.4.0w ~2.2.0w:~2.2.0w:~2.2.0w GMT",
+            [day(DayNumber),DD,month(MM),YYYY,Hour,Min,Sec])).
+
+rfc1123_date(undefined) ->
+    undefined;
+rfc1123_date(UniversalTime) ->
+    {{YYYY,MM,DD},{Hour,Min,Sec}} = UniversalTime,
+    DayNumber = calendar:day_of_the_week({YYYY,MM,DD}),
+    lists:flatten(
+      io_lib:format("~s, ~2.2.0w ~3.s ~4.4.0w ~2.2.0w:~2.2.0w:~2.2.0w GMT",
+            [day(DayNumber),DD,month(MM),YYYY,Hour,Min,Sec])).
+
+%% day
+
+day(1) -> "Mon";
+day(2) -> "Tue";
+day(3) -> "Wed";
+day(4) -> "Thu";
+day(5) -> "Fri";
+day(6) -> "Sat";
+day(7) -> "Sun".
+
+%% month
+
+month(1) -> "Jan";
+month(2) -> "Feb";
+month(3) -> "Mar";
+month(4) -> "Apr";
+month(5) -> "May";
+month(6) -> "Jun";
+month(7) -> "Jul";
+month(8) -> "Aug";
+month(9) -> "Sep";
+month(10) -> "Oct";
+month(11) -> "Nov";
+month(12) -> "Dec".

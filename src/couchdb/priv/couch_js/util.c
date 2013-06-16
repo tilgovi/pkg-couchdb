@@ -20,11 +20,12 @@
 #include "utf8.h"
 
 
-char*
-slurp_file(char* buf, const char* file)
+size_t
+slurp_file(const char* file, char** outbuf_p)
 {
     FILE* fp;
     char fbuf[16384];
+    char *buf = NULL;
     char* tmp;
     size_t nread = 0;
     size_t buflen = 0;
@@ -41,16 +42,13 @@ slurp_file(char* buf, const char* file)
 
     while((nread = fread(fbuf, 1, 16384, fp)) > 0) {
         if(buf == NULL) {
-            buflen = nread;
             buf = (char*) malloc(nread + 1);
             if(buf == NULL) {
                 fprintf(stderr, "Out of memory.\n");
                 exit(3);
             }
-            memcpy(buf, fbuf, buflen);
-            buf[buflen] = '\0';
+            memcpy(buf, fbuf, nread);
         } else {
-            buflen = strlen(buf);
             tmp = (char*) malloc(buflen + nread + 1);
             if(tmp == NULL) {
                 fprintf(stderr, "Out of memory.\n");
@@ -58,12 +56,14 @@ slurp_file(char* buf, const char* file)
             }
             memcpy(tmp, buf, buflen);
             memcpy(tmp+buflen, fbuf, nread);
-            tmp[buflen+nread] = '\0';
             free(buf);
             buf = tmp;
         }
+        buflen += nread;
+        buf[buflen] = '\0';
     }
-    return buf;
+    *outbuf_p = buf;
+    return buflen + 1;
 }
 
 couch_args*
@@ -77,7 +77,7 @@ couch_parse_args(int argc, const char* argv[])
         return NULL;
 
     memset(args, '\0', sizeof(couch_args));
-    args->stack_size = 8L * 1024L;
+    args->stack_size = 64L * 1024L * 1024L;
 
     while(i < argc) {
         if(strcmp("-h", argv[i]) == 0) {
@@ -94,6 +94,8 @@ couch_parse_args(int argc, const char* argv[])
                 fprintf(stderr, "Invalid stack size.\n");
                 exit(2);
             }
+        } else if(strcmp("-u", argv[i]) == 0) {
+            args->uri_file = argv[++i];
         } else if(strcmp("--", argv[i]) == 0) {
             i++;
             break;
@@ -103,24 +105,11 @@ couch_parse_args(int argc, const char* argv[])
         i++;
     }
 
-    while(i < argc) {
-        args->script = slurp_file(args->script, argv[i]);
-        if(args->script_name == NULL) {
-            if(strcmp(argv[i], "-") == 0) {
-                args->script_name = "<stdin>";
-            } else {
-                args->script_name = argv[i];
-            }
-        } else {
-            args->script_name = "<multiple_files>";
-        }
-        i++;
-    }
-
-    if(args->script_name == NULL || args->script == NULL) {
+    if(i >= argc) {
         DISPLAY_USAGE;
         exit(3);
     }
+    args->scripts = argv + i;
 
     return args;
 }
@@ -200,9 +189,19 @@ couch_readline(JSContext* cx, FILE* fp)
 }
 
 
-JSObject*
-couch_readfile(JSContext* cx, FILE* fp)
+JSString*
+couch_readfile(JSContext* cx, const char* filename)
 {
+    JSString *string;
+    size_t byteslen;
+    char *bytes;
+
+    if((byteslen = slurp_file(filename, &bytes))) {
+        string = dec_string(cx, bytes, byteslen);
+
+        free(bytes);
+        return string;
+    }
     return NULL;    
 }
 
@@ -210,29 +209,73 @@ couch_readfile(JSContext* cx, FILE* fp)
 void
 couch_print(JSContext* cx, uintN argc, jsval* argv)
 {
-    char *bytes;
-    uintN i;
+    char *bytes = NULL;
+    FILE *stream = stdout;
 
-    for(i = 0; i < argc; i++)
-    {
-        bytes = enc_string(cx, argv[i], NULL);
+    if (argc) {
+        if (argc > 1 && argv[1] == JSVAL_TRUE) {
+          stream = stderr;
+        }
+        bytes = enc_string(cx, argv[0], NULL);
         if(!bytes) return;
-
-        fprintf(stdout, "%s%s", i ? " " : "", bytes);
+        fprintf(stream, "%s", bytes);
         JS_free(cx, bytes);
     }
 
-    fputc('\n', stdout);
-    fflush(stdout);
+    fputc('\n', stream);
+    fflush(stream);
 }
 
 
 void
 couch_error(JSContext* cx, const char* mesg, JSErrorReport* report)
 {
+    jsval v, replace;
+    char* bytes;
+    JSObject* regexp, *stack;
+    jsval re_args[2];
+
     if(!report || !JSREPORT_IS_WARNING(report->flags))
     {
-        fprintf(stderr, "[couchjs] %s\n", mesg);
+        fprintf(stderr, "%s\n", mesg);
+
+        // Print a stack trace, if available.
+        if (JSREPORT_IS_EXCEPTION(report->flags) &&
+            JS_GetPendingException(cx, &v))
+        {
+            // Clear the exception before an JS method calls or the result is
+            // infinite, recursive error report generation.
+            JS_ClearPendingException(cx);
+
+            // Use JS regexp to indent the stack trace.
+            // If the regexp can't be created, don't JS_ReportError since it is
+            // probably not productive to wind up here again.
+#ifdef SM185
+            if(JS_GetProperty(cx, JSVAL_TO_OBJECT(v), "stack", &v) &&
+               (regexp = JS_NewRegExpObjectNoStatics(
+                   cx, "^(?=.)", 6, JSREG_GLOB | JSREG_MULTILINE)))
+#else
+            if(JS_GetProperty(cx, JSVAL_TO_OBJECT(v), "stack", &v) &&
+               (regexp = JS_NewRegExpObject(
+                   cx, "^(?=.)", 6, JSREG_GLOB | JSREG_MULTILINE)))
+#endif
+            {
+                // Set up the arguments to ``String.replace()``
+                re_args[0] = OBJECT_TO_JSVAL(regexp);
+                re_args[1] = STRING_TO_JSVAL(JS_InternString(cx, "\t"));
+
+                // Perform the replacement
+                if(JS_ValueToObject(cx, v, &stack) &&
+                   JS_GetProperty(cx, stack, "replace", &replace) &&
+                   JS_CallFunctionValue(cx, stack, replace, 2, re_args, &v))
+                {
+                    // Print the result
+                    bytes = enc_string(cx, v, NULL);
+                    fprintf(stderr, "Stacktrace:\n%s", bytes);
+                    JS_free(cx, bytes);
+                }
+            }
+        }
     }
 }
 
@@ -249,4 +292,3 @@ couch_load_funcs(JSContext* cx, JSObject* obj, JSFunctionSpec* funcs)
     }
     return JS_TRUE;
 }
-

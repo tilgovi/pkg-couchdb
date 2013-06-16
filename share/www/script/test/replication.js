@@ -97,6 +97,7 @@ couchTests.replication = function(debug) {
   function populateDb(db, docs, dontRecreateDb) {
     if (dontRecreateDb !== true) {
       db.deleteDb();
+      wait(100);
       db.createDb();
     }
     for (var i = 0; i < docs.length; i++) {
@@ -496,6 +497,15 @@ couchTests.replication = function(debug) {
   } catch (x) {
     TEquals("db_not_found", x.error);
   }
+
+  // validate COUCHDB-317
+  try {
+    CouchDB.replicate("/foobar", "test_suite_db");
+    T(false, "should have failed with db_not_found error");
+  } catch (x) {
+    TEquals("db_not_found", x.error);
+  }
+
   try {
     CouchDB.replicate(CouchDB.protocol + host + "/foobar", "test_suite_db");
     T(false, "should have failed with db_not_found error");
@@ -1280,6 +1290,7 @@ couchTests.replication = function(debug) {
 
     // delete docs from source
     TEquals(true, sourceDb.deleteDoc(newDocs[0]).ok);
+    wait(1000);
     TEquals(true, sourceDb.deleteDoc(newDocs[6]).ok);
 
     waitForSeq(sourceDb, targetDb);

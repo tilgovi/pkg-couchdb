@@ -26,13 +26,16 @@ run: run.tpl
 	$@ < $<
 	chmod +x $@
 
+# @@ wildcards are NOT portable, please replace with clean-local rules
 CLEANFILES = run *.beam
+
 DISTCLEANFILES = temp.*
 
-EXTRA_DIST = \
-    run.tpl \
-    test_web.erl \
-    random_port.ini \
+fixture_files = \
+    fixtures/3b835456c235b1827e012e25666152f3.view \
+    fixtures/test.couch
+
+tap_files = \
     001-load.t \
     002-icu-driver.t \
     010-file-basics.t \
@@ -42,6 +45,7 @@ EXTRA_DIST = \
     030-doc-from-json.t \
     031-doc-to-json.t \
     040-util.t \
+    041-uuid-gen-id.ini \
     041-uuid-gen-seq.ini \
     041-uuid-gen-utc.ini \
     041-uuid-gen.t \
@@ -56,6 +60,7 @@ EXTRA_DIST = \
     070-couch-db.t \
     072-cleanup.t \
     073-changes.t \
+    074-doc-update-conflicts.t \
     075-auth-cache.t \
     076-file-compression.t \
     080-config-get-set.t \
@@ -91,8 +96,12 @@ EXTRA_DIST = \
     201-view-group-shutdown.t \
     210-os-proc-pool.t \
     220-compaction-daemon.t \
-    230-httpc-pool.t \
-    240-replication-compact.t \
-    241-replication-large-atts.t \
-    242-replication-many-leaves.t \
-    243-doc-missing-stubs.t
+    230-pbkfd2.t \
+    231-cors.t \
+    250-upgrade-legacy-view-files.t
+
+EXTRA_DIST = \
+    run.tpl \
+    test_web.erl \
+    $(fixture_files) \
+    $(tap_files)

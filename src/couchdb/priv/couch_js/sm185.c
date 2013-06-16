@@ -134,6 +134,14 @@ req_status(JSContext* cx, JSObject* obj, jsid pid, jsval* vp)
 
 
 static JSBool
+base_url(JSContext *cx, JSObject* obj, jsid pid, jsval* vp)
+{
+    couch_args *args = (couch_args*)JS_GetContextPrivate(cx);
+    return http_uri(cx, obj, args, &JS_RVAL(cx, vp));
+}
+
+
+static JSBool
 evalcx(JSContext *cx, uintN argc, jsval* vp)
 {
     jsval* argv = JS_ARGV(cx, vp);
@@ -146,6 +154,7 @@ evalcx(JSContext *cx, uintN argc, jsval* vp)
     size_t srclen;
     jsval rval;
     JSBool ret = JS_FALSE;
+    char *name = NULL;
 
     sandbox = NULL;
     if(!JS_ConvertArguments(cx, argc, argv, "S / o", &str, &sandbox)) {
@@ -175,16 +184,21 @@ evalcx(JSContext *cx, uintN argc, jsval* vp)
         }
     }
 
+    if(argc > 2) {
+        name = enc_string(cx, argv[2], NULL);
+    }
+
     if(srclen == 0) {
         JS_SET_RVAL(cx, vp, OBJECT_TO_JSVAL(sandbox));
     } else {
-        JS_EvaluateUCScript(subcx, sandbox, src, srclen, NULL, 0, &rval);
+        JS_EvaluateUCScript(subcx, sandbox, src, srclen, name, 1, &rval);
         JS_SET_RVAL(cx, vp, rval);
     }
     
     ret = JS_TRUE;
 
 done:
+    if(name) JS_free(cx, name);
     JS_LeaveCrossCompartmentCall(call);
     FINISH_REQUEST(subcx);
     JS_DestroyContext(subcx);
@@ -279,6 +293,7 @@ JSClass CouchHTTPClass = {
 
 JSPropertySpec CouchHTTPProperties[] = {
     {"status", 0, JSPROP_READONLY, req_status, NULL},
+    {"base_url", 0, JSPROP_READONLY | JSPROP_SHARED, base_url, NULL},
     {0, 0, 0, 0, 0}
 };
 
@@ -316,19 +331,25 @@ main(int argc, const char* argv[])
     size_t slen;
     jsval sroot;
     jsval result;
+    int i;
 
     couch_args* args = couch_parse_args(argc, argv);
 
-    rt = JS_NewRuntime(64L * 1024L * 1024L);
+    rt = JS_NewRuntime(args->stack_size);
     if(rt == NULL)
         return 1;
 
-    cx = JS_NewContext(rt, args->stack_size);
+    cx = JS_NewContext(rt, 8L * 1024L);
     if(cx == NULL)
         return 1;
 
     JS_SetErrorReporter(cx, couch_error);
     JS_ToggleOptions(cx, JSOPTION_XML);
+    JS_SetOptions(cx, JSOPTION_METHODJIT);
+#ifdef JSOPTION_TYPE_INFERENCE
+    JS_SetOptions(cx, JSOPTION_TYPE_INFERENCE);
+#endif
+    JS_SetContextPrivate(cx, args);
     
     SETUP_REQUEST(cx);
 
@@ -365,31 +386,40 @@ main(int argc, const char* argv[])
         }
     } 
 
-    // Convert script source to jschars.
-    scriptsrc = dec_string(cx, args->script, strlen(args->script));
-    if(!scriptsrc)
-        return 1;
+    for(i = 0 ; args->scripts[i] ; i++) {
+        // Convert script source to jschars.
+        scriptsrc = couch_readfile(cx, args->scripts[i]);
+        if(!scriptsrc)
+            return 1;
 
-    schars = JS_GetStringCharsAndLength(cx, scriptsrc, &slen);
-    
-    // Root it so GC doesn't collect it.
-    sroot = STRING_TO_JSVAL(scriptsrc); 
-    if(JS_AddValueRoot(cx, &sroot) != JS_TRUE) {
-        fprintf(stderr, "Internal root error.\n");
-        return 1;
+        schars = JS_GetStringCharsAndLength(cx, scriptsrc, &slen);
+
+        // Root it so GC doesn't collect it.
+        sroot = STRING_TO_JSVAL(scriptsrc);
+        if(JS_AddValueRoot(cx, &sroot) != JS_TRUE) {
+            fprintf(stderr, "Internal root error.\n");
+            return 1;
+        }
+
+        // Compile and run
+        script = JS_CompileUCScript(cx, global, schars, slen,
+                                    args->scripts[i], 1);
+        if(!script) {
+            fprintf(stderr, "Failed to compile script.\n");
+            return 1;
+        }
+
+        if(JS_ExecuteScript(cx, global, script, &result) != JS_TRUE) {
+            fprintf(stderr, "Failed to execute script.\n");
+            return 1;
+        }
+
+        // Warning message if we don't remove it.
+        JS_RemoveValueRoot(cx, &sroot);
+
+        // Give the GC a chance to run.
+        JS_MaybeGC(cx);
     }
-
-    // Compile and run
-    script = JS_CompileUCScript(cx, global, schars, slen, args->script_name, 1);
-    if(!script) {
-        fprintf(stderr, "Failed to compile script.\n");
-        return 1;
-    }
-    
-    JS_ExecuteScript(cx, global, script, &result);
-
-    // Warning message if we don't remove it.
-    JS_RemoveValueRoot(cx, &sroot);
 
     JS_LeaveCrossCompartmentCall(call);
     FINISH_REQUEST(cx);

@@ -9,44 +9,39 @@
 // WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 // License for the specific language governing permissions and limitations under
 // the License.
+//
 
-var console = {
-  log: function(arg) {
-    var msg = (arg.toString()).replace(/\n/g, "\n    ");
-    print("# " + msg);
+/*
+ * Futon test suite was designed to be able to run all tests populated into
+ * couchTests. Here we should only be loading one test, so we'll pop the first
+ * test off the list and run the test. If more than one item is loaded in the
+ * test object, return an error.
+ */
+function runTest() {
+  var count = 0;
+  var start = new Date().getTime();
+
+  for(var name in couchTests) {
+      count++;
   }
-};
 
-function T(arg1, arg2) {
-  if(!arg1) {
-    throw((arg2 ? arg2 : arg1).toString());
+  if (count !== 1) {
+      console.log('Only one test per file is allowed.');
+      quit(1);
   }
-}
 
-function runTestConsole(num, name, func) {
   try {
-    func();
-    print("ok " + num + " " + name);
+    // Add artificial wait for each test of 1 sec
+    while (new Date().getTime() < start + 1200);
+    couchTests[name]();
+    print('OK');
   } catch(e) {
-    msg = e.toString();
-    msg = msg.replace(/\n/g, "\n    ");
-    print("not ok " + num + " " + name + " " + msg);
+    console.log("FAIL\nReason: " + e.message);
+    fmtStack(e.stack);
+    quit(1);
   }
 }
 
-function runAllTestsConsole() {
-  var numTests = 0;
-  for(var t in couchTests) { numTests += 1; }
-  print("1.." + numTests);
-  var testId = 0;
-  for(var t in couchTests) {
-    testId += 1;
-    runTestConsole(testId, t, couchTests[t]);
-  }
-};
+waitForSuccess(CouchDB.isRunning, 'isRunning');
 
-try {
-  runAllTestsConsole();
-} catch (e) {
-  p("# " + e.toString());
-}
+runTest();

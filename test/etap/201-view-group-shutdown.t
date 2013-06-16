@@ -100,9 +100,7 @@ test_view_group_compaction() ->
     etap:is(get_writer_status(Writer1), ok, "Writer 1 opened his database"),
     etap:is(get_writer_status(Writer2), ok, "Writer 2 opened his database"),
 
-    {ok, CompactPid} = couch_view_compactor:start_compact(
-        MainDb#db.name, <<"foo">>),
-    MonRef = erlang:monitor(process, CompactPid),
+    {ok, MonRef} = couch_mrview:compact(MainDb#db.name, <<"_design/foo">>, [monitor]),
 
     % Add some more docs to database and trigger view update
     {ok, MainDb2} = couch_db:open_int(MainDb#db.name, []),
@@ -123,10 +121,10 @@ test_view_group_compaction() ->
     etap:is(is_process_alive(Writer3), true, "Writer 3 still alive"),
 
     receive
-    {'DOWN', MonRef, process, CompactPid, normal} ->
+    {'DOWN', MonRef, process, _, normal} ->
          etap:diag("View group compaction successful"),
          ok;
-    {'DOWN', MonRef, process, CompactPid, _Reason} ->
+    {'DOWN', MonRef, process, _, _Reason} ->
          etap:bail("Failure compacting view group")
     end,
 
@@ -196,20 +194,12 @@ populate_main_db(_Db, _, _) ->
 
 
 update_view(DbName, DDocName, ViewName) ->
-    % Use a dedicated process -  we can't explicitly drop the #group ref counter
-    Pid = spawn(fun() ->
-        {ok, Db} = couch_db:open_int(DbName, []),
-        couch_view:get_map_view(Db, DDocName, ViewName, false),
-        ok = couch_db:close(Db)
-    end),
-    MonRef = erlang:monitor(process, Pid),
-    receive
-    {'DOWN', MonRef, process, Pid, normal} ->
-         etap:diag("View group updated"),
-         ok;
-    {'DOWN', MonRef, process, Pid, _Reason} ->
-         etap:bail("Failure updating view group")
-    end.
+    {ok, Db} = couch_db:open_int(DbName, []),
+    {ok, DDoc} = couch_db:open_doc(Db, DDocName, [ejson_body]),
+    couch_mrview:query_view(Db, DDoc, ViewName, [{stale, false}]),
+    ok = couch_db:close(Db),
+    etap:diag("View group updated").
+
 
 create_db(DbName) ->
     {ok, Db} = couch_db:create(

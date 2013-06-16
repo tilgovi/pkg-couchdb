@@ -13,9 +13,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 #include <jsapi.h>
 #include "config.h"
 #include "utf8.h"
+#include "util.h"
 
 // Soft dependency on cURL bindings because they're
 // only used when running the JS tests from the
@@ -71,9 +74,16 @@ http_status(JSContext* cx, JSObject* req, jsval body)
     return -1;
 }
 
+JSBool
+http_uri(JSContext* cx, JSObject* req, couch_args* args, jsval* uri_val)
+{
+    return JS_FALSE;
+}
+
 
 #else
 #include <curl/curl.h>
+#include <unistd.h>
 
 
 void
@@ -102,7 +112,7 @@ typedef struct {
 } HTTPData;
 
 
-char* METHODS[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "COPY", NULL};
+char* METHODS[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "COPY", "OPTIONS", NULL};
 
 
 #define GET     0
@@ -111,6 +121,7 @@ char* METHODS[] = {"GET", "HEAD", "POST", "PUT", "DELETE", "COPY", NULL};
 #define PUT     3
 #define DELETE  4
 #define COPY    5
+#define OPTIONS 6
 
 
 static JSBool
@@ -196,7 +207,7 @@ http_open(JSContext* cx, JSObject* req, jsval mth, jsval url, jsval snc)
         if(strcasecmp(METHODS[methid], method) == 0) break;
     }
     
-    if(methid > COPY) {
+    if(methid > OPTIONS) {
         JS_ReportError(cx, "Invalid method specified.");
         goto done;
     }
@@ -341,6 +352,42 @@ http_status(JSContext* cx, JSObject* req)
     return http->last_status;
 }
 
+JSBool
+http_uri(JSContext* cx, JSObject* req, couch_args* args, jsval* uri_val)
+{
+    FILE* uri_fp = NULL;
+    JSString* uri_str;
+
+    // Default is http://localhost:5984/ when no uri file is specified
+    if (!args->uri_file) {
+        uri_str = JS_InternString(cx, "http://localhost:5984/");
+        *uri_val = STRING_TO_JSVAL(uri_str);
+        return JS_TRUE;
+    }
+
+    // Else check to see if the base url is cached in a reserved slot
+    if (JS_GetReservedSlot(cx, req, 0, uri_val) && !JSVAL_IS_VOID(*uri_val)) {
+        return JS_TRUE;
+    }
+
+    // Read the first line of the couch.uri file.
+    if(!((uri_fp = fopen(args->uri_file, "r")) &&
+         (uri_str = couch_readline(cx, uri_fp)))) {
+        JS_ReportError(cx, "Failed to read couch.uri file.");
+        goto error;
+    }
+
+    fclose(uri_fp);
+    *uri_val = STRING_TO_JSVAL(uri_str);
+    JS_SetReservedSlot(cx, req, 0, *uri_val);
+    return JS_TRUE;
+
+error:
+    if(uri_fp) fclose(uri_fp);
+    return JS_FALSE;
+}
+
+
 // Curl Helpers
 
 typedef struct {
@@ -372,6 +419,7 @@ static JSBool
 go(JSContext* cx, JSObject* obj, HTTPData* http, char* body, size_t bodylen)
 {
     CurlState state;
+    char* referer;
     JSString* jsbody;
     JSBool ret = JS_FALSE;
     jsval tmp;
@@ -408,7 +456,19 @@ go(JSContext* cx, JSObject* obj, HTTPData* http, char* body, size_t bodylen)
         goto done;
     }
 
-    if(http->method < 0 || http->method > COPY) {
+    if(!JS_GetReservedSlot(cx, obj, 0, &tmp)) {
+      JS_ReportError(cx, "Failed to readreserved slot.");
+      goto done;
+    }
+
+    if(!(referer = enc_string(cx, tmp, NULL))) {
+      JS_ReportError(cx, "Failed to encode referer.");
+      goto done;
+    }
+    curl_easy_setopt(HTTP_HANDLE, CURLOPT_REFERER, referer);
+    free(referer);
+
+    if(http->method < 0 || http->method > OPTIONS) {
         JS_ReportError(cx, "INTERNAL: Unknown method.");
         goto done;
     }

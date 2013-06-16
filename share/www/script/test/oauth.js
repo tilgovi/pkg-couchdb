@@ -105,9 +105,10 @@ couchTests.oauth = function(debug) {
             headers: {
               "Authorization": adminBasicAuthHeaderValue()
             }});
-        if (xhr.responseText.indexOf("\"-hashed-") != 0) {
+        if (xhr.responseText.indexOf("\"-pbkdf2-") != 0) {
             throw("still waiting");
         }
+        return true;
       }, "wait-for-admin");
 
       CouchDB.newUuids(2); // so we have one to make the salt

@@ -17,7 +17,8 @@
 -export([start_compact/1, cancel_compact/1]).
 -export([open_ref_counted/2,is_idle/1,monitor/1,count_changes_since/2]).
 -export([update_doc/3,update_doc/4,update_docs/4,update_docs/2,update_docs/3,delete_doc/3]).
--export([get_doc_info/2,open_doc/2,open_doc/3,open_doc_revs/4]).
+-export([get_doc_info/2,get_full_doc_info/2,get_full_doc_infos/2]).
+-export([open_doc/2,open_doc/3,open_doc_revs/4]).
 -export([set_revs_limit/2,get_revs_limit/1]).
 -export([get_missing_revs/2,name/1,get_update_seq/1,get_committed_update_seq/1]).
 -export([enum_docs/4,enum_docs_since/5]).
@@ -28,7 +29,7 @@
 -export([init/1,terminate/2,handle_call/3,handle_cast/2,code_change/3,handle_info/2]).
 -export([changes_since/4,changes_since/5,read_doc/2,new_revid/1]).
 -export([check_is_admin/1, check_is_member/1]).
--export([reopen/1, is_system_db/1]).
+-export([reopen/1, is_system_db/1, compression/1]).
 
 -include("couch_db.hrl").
 
@@ -50,7 +51,7 @@ open_db_file(Filepath, Options) ->
     {error, enoent} ->
         % couldn't find file. is there a compact version? This can happen if
         % crashed during the file switch.
-        case couch_file:open(Filepath ++ ".compact") of
+        case couch_file:open(Filepath ++ ".compact", [nologifmissing]) of
         {ok, Fd} ->
             ?LOG_INFO("Found ~s~s compaction file, using as primary storage.", [Filepath, ".compact"]),
             ok = file:rename(Filepath ++ ".compact", Filepath),
@@ -304,18 +305,17 @@ sum_tree_sizes(Acc, [T | Rest]) ->
     end.
 
 get_design_docs(Db) ->
-    {ok, _, Docs} = couch_view:fold(
-        #view{btree=by_id_btree(Db)},
-        fun(#full_doc_info{deleted = true}, _Reds, AccDocs) ->
-            {ok, AccDocs};
-        (#full_doc_info{id= <<"_design/",_/binary>>}=FullDocInfo, _Reds, AccDocs) ->
-            {ok, Doc} = open_doc_int(Db, FullDocInfo, [ejson_body]),
-            {ok, [Doc | AccDocs]};
-        (_, _Reds, AccDocs) ->
-            {stop, AccDocs}
-        end,
-        [], [{start_key, <<"_design/">>}, {end_key_gt, <<"_design0">>}]),
-    {ok, Docs}.
+    FoldFun = skip_deleted(fun
+        (#full_doc_info{deleted = true}, _Reds, Acc) ->
+            {ok, Acc};
+        (#full_doc_info{id= <<"_design/",_/binary>>}=FullDocInfo, _Reds, Acc) ->
+            {ok, [FullDocInfo | Acc]};
+        (_, _Reds, Acc) ->
+            {stop, Acc}
+    end),
+    KeyOpts = [{start_key, <<"_design/">>}, {end_key_gt, <<"_design0">>}],
+    {ok, _, Docs} = couch_btree:fold(by_id_btree(Db), FoldFun, [], KeyOpts),
+    Docs.
 
 check_is_admin(#db{user_ctx=#user_ctx{name=Name,roles=Roles}}=Db) ->
     {Admins} = get_admins(Db),
@@ -415,6 +415,9 @@ set_revs_limit(_Db, _Limit) ->
 
 name(#db{name=Name}) ->
     Name.
+
+compression(#db{compression=Compression}) ->
+    Compression.
 
 update_doc(Db, Doc, Options) ->
     update_doc(Db, Doc, Options, interactive_edit).
@@ -684,11 +687,9 @@ check_dup_atts2(_) ->
 
 update_docs(Db, Docs, Options, replicated_changes) ->
     increment_stat(Db, {couchdb, database_writes}),
-
     % associate reference with each doc in order to track duplicates
     Docs2 = lists:map(fun(Doc) -> {Doc, make_ref()} end, Docs),
     DocBuckets = before_docs_update(Db, group_alike_docs(Docs2)),
-
     case (Db#db.validate_doc_funs /= []) orelse
         lists:any(
             fun({#doc{id= <<?DESIGN_DOC_PREFIX, _/binary>>}, _Ref}) -> true;
@@ -884,7 +885,7 @@ before_docs_update(#db{before_doc_update = Fun} = Db, BucketList) ->
     [lists:map(
         fun({Doc, Ref}) ->
             NewDoc = Fun(couch_doc:with_ejson_body(Doc), Db),
-			{NewDoc, Ref}
+            {NewDoc, Ref}
         end,
         Bucket) || Bucket <- BucketList].
 
@@ -922,10 +923,12 @@ flush_att(Fd, #att{data=Data}=Att) when is_binary(Data) ->
     end);
 
 flush_att(Fd, #att{data=Fun,att_len=undefined}=Att) when is_function(Fun) ->
+    MaxChunkSize = list_to_integer(
+        couch_config:get("couchdb", "attachment_stream_buffer_size", "4096")),
     with_stream(Fd, Att, fun(OutputStream) ->
         % Fun(MaxChunkSize, WriterFun) must call WriterFun
         % once for each chunk of the attachment,
-        Fun(4096,
+        Fun(MaxChunkSize,
             % WriterFun({Length, Binary}, State)
             % WriterFun({0, _Footers}, State)
             % Called with Length == 0 on the last time.
@@ -977,15 +980,18 @@ compressible_att_type(MimeType) ->
 % trailer, we're free to ignore this inconsistency and
 % pretend that no Content-MD5 exists.
 with_stream(Fd, #att{md5=InMd5,type=Type,encoding=Enc}=Att, Fun) ->
+    BufferSize = list_to_integer(
+        couch_config:get("couchdb", "attachment_stream_buffer_size", "4096")),
     {ok, OutputStream} = case (Enc =:= identity) andalso
         compressible_att_type(Type) of
     true ->
         CompLevel = list_to_integer(
             couch_config:get("attachments", "compression_level", "0")
         ),
-        couch_stream:open(Fd, gzip, [{compression_level, CompLevel}]);
+        couch_stream:open(Fd, [{buffer_size, BufferSize},
+            {encoding, gzip}, {compression_level, CompLevel}]);
     _ ->
-        couch_stream:open(Fd)
+        couch_stream:open(Fd, [{buffer_size, BufferSize}])
     end,
     ReqMd5 = case Fun(OutputStream) of
         {md5, FooterMd5} ->
@@ -1074,8 +1080,9 @@ enum_docs_since(Db, SinceSeq, InFun, Acc, Options) ->
     {ok, enum_docs_since_reduce_to_count(LastReduction), AccOut}.
 
 enum_docs(Db, InFun, InAcc, Options) ->
-    {ok, LastReduce, OutAcc} = couch_view:fold(
-        #view{btree=by_id_btree(Db)}, InFun, InAcc, Options),
+    FoldFun = skip_deleted(InFun),
+    {ok, LastReduce, OutAcc} = couch_btree:fold(
+        by_id_btree(Db), FoldFun, InAcc, Options),
     {ok, enum_docs_reduce_to_count(LastReduce), OutAcc}.
 
 % server functions
@@ -1334,3 +1341,13 @@ by_seq_btree(#db{docinfo_by_seq_btree = BTree, fd = ReaderFd}) ->
 
 by_id_btree(#db{fulldocinfo_by_id_btree = BTree, fd = ReaderFd}) ->
     BTree#btree{fd = ReaderFd}.
+
+skip_deleted(FoldFun) ->
+    fun
+        (visit, KV, Reds, Acc) ->
+            FoldFun(KV, Reds, Acc);
+        (traverse, _LK, {Undeleted, _Del, _Size}, Acc) when Undeleted == 0 ->
+            {skip, Acc};
+        (traverse, _, _, Acc) ->
+            {ok, Acc}
+    end.

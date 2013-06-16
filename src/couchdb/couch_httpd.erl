@@ -13,7 +13,7 @@
 -module(couch_httpd).
 -include("couch_db.hrl").
 
--export([start_link/0, start_link/1, stop/0, config_change/2, 
+-export([start_link/0, start_link/1, stop/0, config_change/2,
         handle_request/5]).
 
 -export([header_value/2,header_value/3,qs_value/2,qs_value/3,qs/1,qs_json_value/3]).
@@ -21,7 +21,8 @@
 -export([verify_is_server_admin/1,unquote/1,quote/1,recv/2,recv_chunked/4,error_info/1]).
 -export([make_fun_spec_strs/1]).
 -export([make_arity_1_fun/1, make_arity_2_fun/1, make_arity_3_fun/1]).
--export([parse_form/1,json_body/1,json_body_obj/1,body/1,doc_etag/1, make_etag/1, etag_respond/3]).
+-export([parse_form/1,json_body/1,json_body_obj/1,body/1]).
+-export([doc_etag/1, make_etag/1, etag_match/2, etag_respond/3, etag_maybe/2]).
 -export([primary_header_value/2,partition/1,serve_file/3,serve_file/4, server_header/0]).
 -export([start_chunked_response/3,send_chunk/2,log_request/2]).
 -export([start_response_length/4, start_response/3, send/2]).
@@ -29,6 +30,7 @@
 -export([send_response/4,send_method_not_allowed/2,send_error/4, send_redirect/2,send_chunked_error/2]).
 -export([send_json/2,send_json/3,send_json/4,last_chunk/1,parse_multipart_request/3]).
 -export([accepted_encodings/1,handle_request_int/5,validate_referer/1,validate_ctype/2]).
+-export([http_1_0_keep_alive/2]).
 
 start_link() ->
     start_link(http).
@@ -75,12 +77,12 @@ start_link(https) ->
                                     "verify_fun", nil) of
                                 nil -> FinalOpts;
                                 SpecStr ->
-                                    FinalOpts 
+                                    FinalOpts
                                     ++ [{verify_fun, make_arity_3_fun(SpecStr)}]
                             end
                     end
             end,
-            
+
             [{port, Port},
                 {ssl, true},
                 {ssl_opts, FinalSslOpts}];
@@ -96,6 +98,7 @@ start_link(Name, Options) ->
     % will restart us and then we will pick up the new settings.
 
     BindAddress = couch_config:get("httpd", "bind_address", any),
+    validate_bind_address(BindAddress),
     DefaultSpec = "{couch_httpd_db, handle_request}",
     DefaultFun = make_arity_1_fun(
         couch_config:get("httpd", "default_handler", DefaultSpec)
@@ -126,6 +129,10 @@ start_link(Name, Options) ->
 
     set_auth_handlers(),
 
+    % ensure uuid is set so that concurrent replications
+    % get the same value.
+    couch_server:get_uuid(),
+
     Loop = fun(Req)->
         case SocketOptions of
         [] ->
@@ -146,7 +153,7 @@ start_link(Name, Options) ->
 
     % launch mochiweb
     {ok, Pid} = case mochiweb_http:start(FinalOptions) of
-        {ok, MochiPid} -> 
+        {ok, MochiPid} ->
             {ok, MochiPid};
         {error, Reason} ->
             io:format("Failure to start Mochiweb: ~s~n",[Reason]),
@@ -217,11 +224,13 @@ make_arity_3_fun(SpecStr) ->
 make_fun_spec_strs(SpecStr) ->
     re:split(SpecStr, "(?<=})\\s*,\\s*(?={)", [{return, list}]).
 
-handle_request(MochiReq, DefaultFun, UrlHandlers, DbUrlHandlers, 
+handle_request(MochiReq, DefaultFun, UrlHandlers, DbUrlHandlers,
     DesignUrlHandlers) ->
+    %% reset rewrite count for new request
+    erlang:put(?REWRITE_COUNT, 0),
 
     MochiReq1 = couch_httpd_vhost:dispatch_host(MochiReq),
-    
+
     handle_request_int(MochiReq1, DefaultFun,
                 UrlHandlers, DbUrlHandlers, DesignUrlHandlers).
 
@@ -233,7 +242,7 @@ handle_request_int(MochiReq, DefaultFun,
     RawUri = MochiReq:get(raw_path),
     {"/" ++ Path, _, _} = mochiweb_util:urlsplit_path(RawUri),
 
-    Headers = MochiReq:get(headers), 
+    Headers = MochiReq:get(headers),
 
     % get requested path
     RequestedPath = case MochiReq:get_header_value("x-couchdb-vhost-path") of
@@ -244,7 +253,7 @@ handle_request_int(MochiReq, DefaultFun,
             end;
         P -> P
     end,
-    
+
     HandlerKey =
     case mochiweb_util:partition(Path, "/") of
     {"", "", ""} ->
@@ -259,7 +268,7 @@ handle_request_int(MochiReq, DefaultFun,
         MochiReq:get(peer),
         mochiweb_headers:to_list(MochiReq:get(headers))
     ]),
-    
+
     Method1 =
     case MochiReq:get(method) of
         % already an atom
@@ -273,12 +282,15 @@ handle_request_int(MochiReq, DefaultFun,
 
     % allow broken HTTP clients to fake a full method vocabulary with an X-HTTP-METHOD-OVERRIDE header
     MethodOverride = MochiReq:get_primary_header_value("X-HTTP-Method-Override"),
-    Method2 = case lists:member(MethodOverride, ["GET", "HEAD", "POST", "PUT", "DELETE", "TRACE", "CONNECT", "COPY"]) of
-    true -> 
+    Method2 = case lists:member(MethodOverride, ["GET", "HEAD", "POST",
+                                                 "PUT", "DELETE",
+                                                 "TRACE", "CONNECT",
+                                                 "COPY"]) of
+    true ->
         ?LOG_INFO("MethodOverride: ~s (real method was ~s)", [MethodOverride, Method1]),
         case Method1 of
         'POST' -> couch_util:to_existing_atom(MethodOverride);
-        _ -> 
+        _ ->
             % Ignore X-HTTP-Method-Override when the original verb isn't POST.
             % I'd like to send a 406 error to the client, but that'd require a nasty refactor.
             % throw({not_acceptable, <<"X-HTTP-Method-Override may only be used with POST requests.">>})
@@ -304,7 +316,8 @@ handle_request_int(MochiReq, DefaultFun,
         design_url_handlers = DesignUrlHandlers,
         default_fun = DefaultFun,
         url_handlers = UrlHandlers,
-        user_ctx = erlang:erase(pre_rewrite_user_ctx)
+        user_ctx = erlang:erase(pre_rewrite_user_ctx),
+        auth = erlang:erase(pre_rewrite_auth)
     },
 
     HandlerFun = couch_util:dict_find(HandlerKey, UrlHandlers, DefaultFun),
@@ -312,9 +325,14 @@ handle_request_int(MochiReq, DefaultFun,
 
     {ok, Resp} =
     try
-        case authenticate_request(HttpReq, AuthHandlers) of
-        #httpd{} = Req ->
-            HandlerFun(Req);
+        case couch_httpd_cors:is_preflight_request(HttpReq) of
+        #httpd{} ->
+            case authenticate_request(HttpReq, AuthHandlers) of
+            #httpd{} = Req ->
+                HandlerFun(Req);
+            Response ->
+                Response
+            end;
         Response ->
             Response
         end
@@ -338,6 +356,8 @@ handle_request_int(MochiReq, DefaultFun,
                 " must be built with Erlang OTP R13B04 or higher.",
             ?LOG_ERROR("~s", [ErrorReason]),
             send_error(HttpReq, {bad_otp_release, ErrorReason});
+        exit:{body_too_large, _} ->
+            send_error(HttpReq, request_entity_too_large);
         throw:Error ->
             Stack = erlang:get_stacktrace(),
             ?LOG_DEBUG("Minor error in HTTP request: ~p",[Error]),
@@ -446,10 +466,14 @@ accepted_encodings(#httpd{mochi_req=MochiReq}) ->
 serve_file(Req, RelativePath, DocumentRoot) ->
     serve_file(Req, RelativePath, DocumentRoot, []).
 
-serve_file(#httpd{mochi_req=MochiReq}=Req, RelativePath, DocumentRoot, ExtraHeaders) ->
+serve_file(#httpd{mochi_req=MochiReq}=Req, RelativePath, DocumentRoot,
+           ExtraHeaders) ->
     log_request(Req, 200),
+    ResponseHeaders = server_header()
+        ++ couch_httpd_auth:cookie_auth_header(Req, [])
+        ++ ExtraHeaders,
     {ok, MochiReq:serve_file(RelativePath, DocumentRoot,
-        server_header() ++ couch_httpd_auth:cookie_auth_header(Req, []) ++ ExtraHeaders)}.
+            couch_httpd_cors:cors_headers(Req, ResponseHeaders))}.
 
 qs_value(Req, Key) ->
     qs_value(Req, Key, undefined).
@@ -477,7 +501,10 @@ host_for_request(#httpd{mochi_req=MochiReq}) ->
         undefined ->
             case MochiReq:get_header_value("Host") of
                 undefined ->
-                    {ok, {Address, Port}} = inet:sockname(MochiReq:get(socket)),
+                    {ok, {Address, Port}} = case MochiReq:get(socket) of
+                        {ssl, SslSocket} -> ssl:sockname(SslSocket);
+                        Socket -> inet:sockname(Socket)
+                    end,
                     inet_parse:ntoa(Address) ++ ":" ++ integer_to_list(Port);
                 Value1 ->
                     Value1
@@ -520,34 +547,14 @@ recv_chunked(#httpd{mochi_req=MochiReq}, MaxChunkSize, ChunkFun, InitState) ->
     % Fun({Length, Binary}, State)
     % called with Length == 0 on the last time.
     MochiReq:stream_body(MaxChunkSize, ChunkFun, InitState).
-    
-body_length(Req) ->
-    case header_value(Req, "Transfer-Encoding") of
-        undefined ->
-            case header_value(Req, "Content-Length") of
-                undefined -> undefined;
-                Length -> list_to_integer(Length)
-            end;
-        "chunked" -> chunked;
-        Unknown -> {unknown_transfer_encoding, Unknown}
-    end.
 
-body(#httpd{mochi_req=MochiReq, req_body=undefined} = Req) ->
-    case body_length(Req) of
-        undefined ->
-            MaxSize = list_to_integer(
-                couch_config:get("couchdb", "max_document_size", "4294967296")),
-            MochiReq:recv_body(MaxSize);
-        chunked ->
-            ChunkFun = fun({0, _Footers}, Acc) ->
-                lists:reverse(Acc);
-            ({_Len, Chunk}, Acc) ->
-                [Chunk | Acc]
-            end,
-            recv_chunked(Req, 8192, ChunkFun, []);
-        Len ->
-            MochiReq:recv_body(Len)
-    end;
+body_length(#httpd{mochi_req=MochiReq}) ->
+    MochiReq:get(body_length).
+
+body(#httpd{mochi_req=MochiReq, req_body=undefined}) ->
+    MaxSize = list_to_integer(
+        couch_config:get("couchdb", "max_document_size", "4294967296")),
+    MochiReq:recv_body(MaxSize);
 body(#httpd{req_body=ReqBody}) ->
     ReqBody.
 
@@ -588,6 +595,14 @@ etag_respond(Req, CurrentEtag, RespFun) ->
         RespFun()
     end.
 
+etag_maybe(Req, RespFun) ->
+    try
+        RespFun()
+    catch
+        throw:{etag_match, ETag} ->
+            send_response(Req, 304, [{"ETag", ETag}], <<>>)
+    end.
+
 verify_is_server_admin(#httpd{user_ctx=UserCtx}) ->
     verify_is_server_admin(UserCtx);
 verify_is_server_admin(#user_ctx{roles=Roles}) ->
@@ -608,7 +623,10 @@ log_request(#httpd{mochi_req=MochiReq,peer=Peer}, Code) ->
 start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
     log_request(Req, Code),
     couch_stats_collector:increment({httpd_status_codes, Code}),
-    Resp = MochiReq:start_response_length({Code, Headers ++ server_header() ++ couch_httpd_auth:cookie_auth_header(Req, Headers), Length}),
+    Headers1 = Headers ++ server_header() ++
+               couch_httpd_auth:cookie_auth_header(Req, Headers),
+    Headers2 = couch_httpd_cors:cors_headers(Req, Headers1),
+    Resp = MochiReq:start_response_length({Code, Headers2, Length}),
     case MochiReq:get(method) of
     'HEAD' -> throw({http_head_abort, Resp});
     _ -> ok
@@ -617,9 +635,10 @@ start_response_length(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Length) ->
 
 start_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_request(Req, Code),
-    couch_stats_collector:increment({httpd_status_cdes, Code}),
+    couch_stats_collector:increment({httpd_status_codes, Code}),
     CookieHeader = couch_httpd_auth:cookie_auth_header(Req, Headers),
-    Headers2 = Headers ++ server_header() ++ CookieHeader,
+    Headers1 = Headers ++ server_header() ++ CookieHeader,
+    Headers2 = couch_httpd_cors:cors_headers(Req, Headers1),
     Resp = MochiReq:start_response({Code, Headers2}),
     case MochiReq:get(method) of
         'HEAD' -> throw({http_head_abort, Resp});
@@ -651,8 +670,11 @@ http_1_0_keep_alive(Req, Headers) ->
 start_chunked_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers) ->
     log_request(Req, Code),
     couch_stats_collector:increment({httpd_status_codes, Code}),
-    Headers2 = http_1_0_keep_alive(MochiReq, Headers),
-    Resp = MochiReq:respond({Code, Headers2 ++ server_header() ++ couch_httpd_auth:cookie_auth_header(Req, Headers2), chunked}),
+    Headers1 = http_1_0_keep_alive(MochiReq, Headers),
+    Headers2 = Headers1 ++ server_header() ++
+               couch_httpd_auth:cookie_auth_header(Req, Headers1),
+    Headers3 = couch_httpd_cors:cors_headers(Req, Headers2),
+    Resp = MochiReq:respond({Code, Headers3, chunked}),
     case MochiReq:get(method) of
     'HEAD' -> throw({http_head_abort, Resp});
     _ -> ok
@@ -673,12 +695,18 @@ last_chunk(Resp) ->
 send_response(#httpd{mochi_req=MochiReq}=Req, Code, Headers, Body) ->
     log_request(Req, Code),
     couch_stats_collector:increment({httpd_status_codes, Code}),
-    Headers2 = http_1_0_keep_alive(MochiReq, Headers),
-    if Code >= 400 ->
+    Headers1 = http_1_0_keep_alive(MochiReq, Headers),
+    if Code >= 500 ->
+        ?LOG_ERROR("httpd ~p error response:~n ~s", [Code, Body]);
+    Code >= 400 ->
         ?LOG_DEBUG("httpd ~p error response:~n ~s", [Code, Body]);
     true -> ok
     end,
-    {ok, MochiReq:respond({Code, Headers2 ++ server_header() ++ couch_httpd_auth:cookie_auth_header(Req, Headers2), Body})}.
+    Headers2 = Headers1 ++ server_header() ++
+               couch_httpd_auth:cookie_auth_header(Req, Headers1),
+    Headers3 = couch_httpd_cors:cors_headers(Req, Headers2),
+
+    {ok, MochiReq:respond({Code, Headers3, Body})}.
 
 send_method_not_allowed(Req, Methods) ->
     send_error(Req, 405, [{"Allow", Methods}], <<"method_not_allowed">>, ?l2b("Only " ++ Methods ++ " allowed")).
@@ -746,7 +774,7 @@ start_jsonp() ->
     case get(jsonp) of
         no_jsonp -> [];
         [] -> [];
-        CallBack -> CallBack ++ "("
+        CallBack -> ["/* CouchDB */", CallBack, "("]
     end.
 
 end_jsonp() ->
@@ -801,21 +829,22 @@ error_info({unauthorized, Msg}) ->
 error_info(file_exists) ->
     {412, <<"file_exists">>, <<"The database could not be "
         "created, the file already exists.">>};
+error_info(request_entity_too_large) ->
+    {413, <<"too_large">>, <<"the request entity is too large">>};
 error_info({bad_ctype, Reason}) ->
     {415, <<"bad_content_type">>, Reason};
 error_info(requested_range_not_satisfiable) ->
     {416, <<"requested_range_not_satisfiable">>, <<"Requested range not satisfiable">>};
-error_info({error, illegal_database_name}) ->
-    {400, <<"illegal_database_name">>, <<"Only lowercase characters (a-z), "
-        "digits (0-9), and any of the characters _, $, (, ), +, -, and / "
-        "are allowed. Must begin with a letter.">>};
+error_info({error, illegal_database_name, Name}) ->
+    Message = "Name: '" ++ Name ++ "'. Only lowercase characters (a-z), "
+        ++ "digits (0-9), and any of the characters _, $, (, ), +, -, and / "
+        ++ "are allowed. Must begin with a letter.",
+    {400, <<"illegal_database_name">>, couch_util:to_binary(Message)};
 error_info({missing_stub, Reason}) ->
     {412, <<"missing_stub">>, Reason};
 error_info({Error, Reason}) ->
-    ?LOG_ERROR("Uncaught server error: ~p", [{Error, Reason}]),
     {500, couch_util:to_binary(Error), couch_util:to_binary(Reason)};
 error_info(Error) ->
-    ?LOG_ERROR("Uncaught server error: ~p", [Error]),
     {500, <<"unknown_error">>, couch_util:to_binary(Error)}.
 
 error_headers(#httpd{mochi_req=MochiReq}=Req, Code, ErrorStr, ReasonStr) ->
@@ -961,7 +990,7 @@ get_boundary({"multipart/" ++ _, Opts}) ->
 get_boundary(ContentType) ->
     {"multipart/" ++ _ , Opts} = mochiweb_util:parse_header(ContentType),
     get_boundary({"multipart/", Opts}).
-    
+
 
 
 split_header(<<>>) ->
@@ -1007,7 +1036,7 @@ parse_part_header(#mp{callback=UserCallBack}=Mp) ->
     {Mp2, AccCallback} = read_until(Mp, <<"\r\n\r\n">>,
             fun(Next) -> acc_callback(Next, []) end),
     HeaderData = AccCallback(get_data),
-    
+
     Headers =
     lists:foldl(fun(Line, Acc) ->
             split_header(Line) ++ Acc
@@ -1049,33 +1078,36 @@ check_for_last(#mp{buffer=Buffer, data_fun=DataFun}=Mp) ->
                 data_fun = DataFun2})
     end.
 
-find_in_binary(B, Data) when size(B) > 0 ->
-    case size(Data) - size(B) of
-        Last when Last < 0 ->
-            partial_find(B, Data, 0, size(Data));
-        Last ->
-            find_in_binary(B, size(B), Data, 0, Last)
-    end.
-
-find_in_binary(B, BS, D, N, Last) when N =< Last->
-    case D of
-        <<_:N/binary, B:BS/binary, _/binary>> ->
-            {exact, N};
-        _ ->
-            find_in_binary(B, BS, D, 1 + N, Last)
-    end;
-find_in_binary(B, BS, D, N, Last) when N =:= 1 + Last ->
-    partial_find(B, D, N, BS - 1).
-
-partial_find(_B, _D, _N, 0) ->
+find_in_binary(_B, <<>>) ->
     not_found;
-partial_find(B, D, N, K) ->
-    <<B1:K/binary, _/binary>> = B,
-    case D of
-        <<_Skip:N/binary, B1/binary>> ->
-            {partial, N};
-        _ ->
-            partial_find(B, D, 1 + N, K - 1)
+
+find_in_binary(B, Data) ->
+    case binary:match(Data, [B], []) of
+    nomatch ->
+        partial_find(binary:part(B, {0, byte_size(B) - 1}),
+                     binary:part(Data, {byte_size(Data), -byte_size(Data) + 1}), 1);
+    {Pos, _Len} ->
+        {exact, Pos}
     end.
 
+partial_find(<<>>, _Data, _Pos) ->
+    not_found;
 
+partial_find(B, Data, N) when byte_size(Data) > 0 ->
+    case binary:match(Data, [B], []) of
+    nomatch ->
+        partial_find(binary:part(B, {0, byte_size(B) - 1}),
+                     binary:part(Data, {byte_size(Data), -byte_size(Data) + 1}), N + 1);
+    {Pos, _Len} ->
+        {partial, N + Pos}
+    end;
+
+partial_find(_B, _Data, _N) ->
+    not_found.
+
+
+validate_bind_address(Address) ->
+    case inet_parse:address(Address) of
+        {ok, _} -> ok;
+        _ -> throw({error, invalid_bind_address})
+    end.

@@ -49,20 +49,35 @@ get_user_creds(UserName) ->
         [HashedPwd, Salt] = string:tokens(HashedPwdAndSalt, ","),
         case get_from_cache(UserName) of
         nil ->
-            [{<<"roles">>, [<<"_admin">>]},
-                {<<"salt">>, ?l2b(Salt)},
-                {<<"password_sha">>, ?l2b(HashedPwd)}];
+            make_admin_doc(HashedPwd, Salt, []);
         UserProps when is_list(UserProps) ->
-            DocRoles = couch_util:get_value(<<"roles">>, UserProps),
-            [{<<"roles">>, [<<"_admin">> | DocRoles]},
-                {<<"salt">>, ?l2b(Salt)},
-                {<<"password_sha">>, ?l2b(HashedPwd)}]
+            make_admin_doc(HashedPwd, Salt, couch_util:get_value(<<"roles">>, UserProps))
         end;
+    "-pbkdf2-" ++ HashedPwdSaltAndIterations ->
+        [HashedPwd, Salt, Iterations] = string:tokens(HashedPwdSaltAndIterations, ","),
+        case get_from_cache(UserName) of
+        nil ->
+            make_admin_doc(HashedPwd, Salt, Iterations, []);
+        UserProps when is_list(UserProps) ->
+            make_admin_doc(HashedPwd, Salt, Iterations, couch_util:get_value(<<"roles">>, UserProps))
+    end;
     _Else ->
         get_from_cache(UserName)
     end,
     validate_user_creds(UserCreds).
 
+make_admin_doc(HashedPwd, Salt, ExtraRoles) ->
+    [{<<"roles">>, [<<"_admin">>|ExtraRoles]},
+     {<<"salt">>, ?l2b(Salt)},
+     {<<"password_scheme">>, <<"simple">>},
+     {<<"password_sha">>, ?l2b(HashedPwd)}].
+
+make_admin_doc(DerivedKey, Salt, Iterations, ExtraRoles) ->
+    [{<<"roles">>, [<<"_admin">>|ExtraRoles]},
+     {<<"salt">>, ?l2b(Salt)},
+     {<<"iterations">>, list_to_integer(Iterations)},
+     {<<"password_scheme">>, <<"pbkdf2">>},
+     {<<"derived_key">>, ?l2b(DerivedKey)}].
 
 get_from_cache(UserName) ->
     exec_if_auth_db(
@@ -293,7 +308,7 @@ refresh_entry(Db, #doc_info{high_seq = DocSeq} = DocInfo) ->
 user_creds(#doc{deleted = true}) ->
     nil;
 user_creds(#doc{} = Doc) ->
-    {Creds} = couch_query_servers:json_doc(Doc),
+    {Creds} = couch_doc:to_json_obj(Doc, []),
     Creds.
 
 
@@ -360,7 +375,7 @@ get_user_props_from_db(UserName) ->
             DocId = <<"org.couchdb.user:", UserName/binary>>,
             try
                 {ok, Doc} = couch_db:open_doc(Db, DocId, [conflicts]),
-                {DocProps} = couch_query_servers:json_doc(Doc),
+                {DocProps} = couch_doc:to_json_obj(Doc, []),
                 DocProps
             catch
             _:_Error ->
@@ -371,7 +386,7 @@ get_user_props_from_db(UserName) ->
     ).
 
 ensure_users_db_exists(DbName, Options) ->
-    Options1 = [{user_ctx, #user_ctx{roles=[<<"_admin">>]}} | Options],
+    Options1 = [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}, nologifmissing | Options],
     case couch_db:open(DbName, Options1) of
     {ok, Db} ->
         ensure_auth_ddoc_exists(Db, <<"_design/_auth">>),

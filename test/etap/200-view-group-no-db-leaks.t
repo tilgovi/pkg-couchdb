@@ -54,7 +54,7 @@ ddoc_name() -> <<"foo">>.
 main(_) ->
     test_util:init_code_path(),
 
-    etap:plan(33),
+    etap:plan(28),
     case (catch test()) of
         ok ->
             etap:end_tests();
@@ -76,19 +76,20 @@ test() ->
     create_docs(),
     {ok, DDocRev} = create_design_doc(),
 
-    ViewGroup = couch_view:get_group_server(
-        test_db_name(), <<"_design/", (ddoc_name())/binary>>),
-    etap:is(is_pid(ViewGroup), true, "got view group pid"),
-    etap:is(is_process_alive(ViewGroup), true, "view group pid is alive"),
+    {ok, IndexerPid} = couch_index_server:get_index(
+        couch_mrview_index, test_db_name(), <<"_design/", (ddoc_name())/binary>>
+    ),
+    etap:is(is_pid(IndexerPid), true, "got view group pid"),
+    etap:is(is_process_alive(IndexerPid), true, "view group pid is alive"),
 
     query_view(3, null, false),
     check_db_ref_count(),
-    etap:is(is_process_alive(ViewGroup), true, "view group pid is alive"),
+    etap:is(is_process_alive(IndexerPid), true, "view group pid is alive"),
 
     create_new_doc(<<"doc1000">>),
     query_view(4, null, false),
     check_db_ref_count(),
-    etap:is(is_process_alive(ViewGroup), true, "view group pid is alive"),
+    etap:is(is_process_alive(IndexerPid), true, "view group pid is alive"),
 
     Ref1 = get_db_ref_counter(),
     compact_db(),
@@ -96,32 +97,33 @@ test() ->
     Ref2 = get_db_ref_counter(),
     etap:isnt(Ref1, Ref2,  "DB ref counter changed"),
     etap:is(false, is_process_alive(Ref1), "old DB ref counter is not alive"),
-    etap:is(is_process_alive(ViewGroup), true, "view group pid is alive"),
+    etap:is(is_process_alive(IndexerPid), true, "view group pid is alive"),
 
     compact_view_group(),
     check_db_ref_count(),
     Ref3 = get_db_ref_counter(),
     etap:is(Ref3, Ref2,  "DB ref counter didn't change"),
-    etap:is(is_process_alive(ViewGroup), true, "view group pid is alive"),
+    etap:is(is_process_alive(IndexerPid), true, "view group pid is alive"),
 
     create_new_doc(<<"doc1001">>),
     query_view(5, null, false),
     check_db_ref_count(),
-    etap:is(is_process_alive(ViewGroup), true, "view group pid is alive"),
+    etap:is(is_process_alive(IndexerPid), true, "view group pid is alive"),
 
     etap:diag("updating the design document with a new view definition"),
     {ok, _NewDDocRev} = update_ddoc_view(DDocRev),
 
-    NewViewGroup = couch_view:get_group_server(
-        test_db_name(), <<"_design/", (ddoc_name())/binary>>),
-    etap:is(is_pid(NewViewGroup), true, "got new view group pid"),
-    etap:is(is_process_alive(NewViewGroup), true, "new view group pid is alive"),
-    etap:isnt(NewViewGroup, ViewGroup, "new view group has a different pid"),
+    {ok, NewIndexerPid} = couch_index_server:get_index(
+        couch_mrview_index, test_db_name(), <<"_design/", (ddoc_name())/binary>>
+    ),
+    etap:is(is_pid(NewIndexerPid), true, "got new view group pid"),
+    etap:is(is_process_alive(NewIndexerPid), true, "new view group pid is alive"),
+    etap:isnt(NewIndexerPid, IndexerPid, "new view group has a different pid"),
     etap:diag("querying view with ?stale=ok, must return empty row set"),
     query_view(0, foo, ok),
     etap:diag("querying view (without stale), must return 5 rows with value 1"),
     query_view(5, 1, false),
-    MonRef = erlang:monitor(process, ViewGroup),
+    MonRef = erlang:monitor(process, IndexerPid),
     receive
     {'DOWN', MonRef, _, _, _} ->
         etap:diag("old view group is dead after ddoc update")
@@ -129,39 +131,8 @@ test() ->
         etap:bail("old view group is not dead after ddoc update")
     end,
 
-    NewViewGroup = couch_view:get_group_server(
-        test_db_name(), <<"_design/", (ddoc_name())/binary>>),
-    etap:is(is_pid(NewViewGroup), true, "got new view group pid"),
-    etap:is(is_process_alive(NewViewGroup), true, "new view group pid is alive"),
-
-    RootDir = couch_config:get("couchdb", "view_index_dir"),
-    IndexFileName = couch_view_group:index_file_name(
-        RootDir, test_db_name(), NewViewGroup),
-    ok = file:change_mode(IndexFileName, 8#00200),
-
-    MonRef1 = erlang:monitor(process, NewViewGroup),
-    exit(NewViewGroup, shutdown),
-    receive
-    {'DOWN', MonRef1, _, _, _} ->
-        etap:diag("new view group is dead after explicit shutdown")
-    after 5000 ->
-        etap:bail("old view group is not dead after explicit shutdown")
-    end,
-
-    ReadError = (catch couch_view:get_group_server(
-        test_db_name(), <<"_design/", (ddoc_name())/binary>>)),
-    etap:is(ReadError, {error, eacces},
-        "opening a view group requires file read access"),
-    etap:diag("checking that a view group is not deleted when open fails"),
-    ok = file:change_mode(IndexFileName, 8#00600),
-
-    NewViewGroup2 = couch_view:get_group_server(
-        test_db_name(), <<"_design/", (ddoc_name())/binary>>),
-    etap:is(is_pid(NewViewGroup2), true, "got new view group pid"),
-    etap:is(is_process_alive(NewViewGroup2), true, "new view group pid is alive"),
-
     etap:diag("deleting database"),
-    MonRef2 = erlang:monitor(process, NewViewGroup2),
+    MonRef2 = erlang:monitor(process, NewIndexerPid),
     ok = couch_server:delete(test_db_name(), []),
     receive
     {'DOWN', MonRef2, _, _, _} ->
@@ -207,7 +178,8 @@ wait_db_compact_done(N) ->
     end.
 
 compact_view_group() ->
-    {ok, _} = couch_view_compactor:start_compact(test_db_name(), ddoc_name()),
+    DDoc = list_to_binary("_design/" ++ binary_to_list(ddoc_name())),
+    ok = couch_mrview:compact(test_db_name(), DDoc),
     wait_view_compact_done(10).
 
 wait_view_compact_done(0) ->

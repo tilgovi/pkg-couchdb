@@ -373,14 +373,15 @@ get_oauth_ddoc() ->
 
 
 query_oauth_view(Db, Key) ->
-    {ok, View, _} = couch_view:get_map_view(
-        Db, ?OAUTH_DDOC_ID, ?OAUTH_VIEW_NAME, nil),
-    FoldlFun = fun({_Key_DocId, Value}, _, Acc) ->
-        {ok, [Value | Acc]}
-    end,
     ViewOptions = [
-        {start_key, {Key, ?MIN_STR}},
-        {end_key, {Key, ?MAX_STR}}
+        {start_key, Key},
+        {end_key, Key}
     ],
-    {ok, _, Result} = couch_view:fold(View, FoldlFun, [], ViewOptions),
+    Callback = fun({row, Row}, Acc) ->
+            {ok, [couch_util:get_value(value, Row) | Acc]};
+        (_, Acc) ->
+            {ok, Acc}
+    end,
+    {ok, Result} = couch_mrview:query_view(
+        Db, ?OAUTH_DDOC_ID, ?OAUTH_VIEW_NAME, ViewOptions, Callback, []),
     Result.

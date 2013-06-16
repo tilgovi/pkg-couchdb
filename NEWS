@@ -7,6 +7,56 @@ For details about backwards incompatible changes, see:
 
 Each release section notes when backwards incompatible changes have been made.
 
+Version 1.3.1
+-------------
+
+ * Tolerate missing source and target fields in _replicator docs.
+ * Don't log about missing .compact files.
+ * Fix bug in WARN level logging from 1.3.0.
+ * Improve documentation: better structure, improve language, less duplication.
+ * Improvements to test suite.
+
+Version 1.3.0
+-------------
+
+ * Added view request duration to Futon.
+ * Removed the Futon test suite in favour of the CLI test suite.
+ * Added documentation. HTML, PDF, and info versions. Accessible via Futon.
+ * Fixed unnecessary conflict when deleting and creating a document in the same
+   batch.
+ * New and updated passwords are hashed using PBKDF2.
+ * Fix various bugs in the URL rewriter when recursion is involved.
+ * Added Server-Sent Events protocol to db changes API.
+ * Moved the JS test suite to the CLI.
+ * Make password hashing synchronous when using the /_config/admins API.
+ * Added utc_id UUID algorithm.
+ * Encode database name during URL rewriting.
+ * Include user name in show/list ETags.
+ * Server-wide UUID in some replication ids.
+ * E4X support in views is now deprecated and will be removed in a future
+   version.
+ * Experimental support for Cross-Origin Resource Sharing (CORS).
+
+Version 1.2.2
+-------------
+
+ * Fixed rewrite counter bug.
+
+Version 1.2.1
+-------------
+
+ * Fixed CVE-2012-5641: Apache CouchDB Information disclosure via unescaped
+   backslashes in URLs on Windows
+ * Fixed CVE-2012-5649: Apache CouchDB JSONP arbitrary code execution with Adobe
+   Flash
+ * Fixed CVE-2012-5650: Apache CouchDB DOM based Cross-Site Scripting via Futon
+   UI
+ * Fix various bugs in the URL rewriter when recursion is involved.
+ * Fix couchdb start script.
+ * Futon: Disable buttons that aren't available for the logged-in user.
+ * Fix potential replication timeouts.
+ * Change use of signals to avoid broken view groups.
+
 Version 1.2.0
 -------------
 
@@ -50,38 +100,58 @@ This release contains backwards incompatible changes.
  * Fixed incorrect reduce query results when using pagination parameters.
  * Made icu_driver work with Erlang R15B and later.
  * Improvements to the build system and etap test suite.
+ * Improvements to log messages for file-related errors.
  * Avoid invalidating view indexes when running out of file descriptors.
  * Log correct stacktrace in all cases.
+
+Version 1.1.2
+-------------
+
+ * Fixed CVE-2012-5641: Apache CouchDB Information disclosure via unescaped
+   backslashes in URLs on Windows
+ * Fixed CVE-2012-5649: Apache CouchDB JSONP arbitrary code execution with
+   Adobe Flash
+ * Fixed CVE-2012-5650: Apache CouchDB DOM based Cross-Site Scripting via Futon
+   UI
+ * ETag of attachment changes only when the attachment changes, not
+   the document.
+ * Fix pull replication of documents with many revisions.
+ * Fix replication with an HTTP source and target
+ * Avoid invalidating view indexes when running out of file descriptors.
  * Improvements to log messages for file-related errors.
+ * Fix retrieval of headers larger than 4k.
+ * Allow OPTIONS HTTP method for list requests.
+ * Don't attempt to encode invalid json.
+ * Improve SpiderMonkey version detection.
 
 Version 1.1.1
 -------------
 
-* Support SpiderMonkey 1.8.5
-* Add configurable maximum to the number of bytes returned by _log.
-* Allow CommonJS modules to be an empty string.
-* Bump minimum Erlang version to R13B02.
-* Do not run deleted validate_doc_update functions.
-* ETags for views include current sequence if include_docs=true.
-* Fix bug where duplicates can appear in _changes feed.
-* Fix bug where update handlers break after conflict resolution.
-* Fix bug with _replicator where include "filter" could crash couch.
-* Fix crashes when compacting large views.
-* Fix file descriptor leak in _log
-* Fix missing revisions in _changes?style=all_docs.
-* Improve handling of compaction at max_dbs_open limit.
-* JSONP responses now send "text/javascript" for Content-Type.
-* Link to ICU 4.2 on Windows.
-* Permit forward slashes in path to update functions.
-* Reap couchjs processes that hit reduce_overflow error.
-* Status code can be specified in update handlers.
-* Support provides() in show functions.
-* _view_cleanup when ddoc has no views now removes all index files.
-* max_replication_retry_count now supports "infinity".
-* Fix replication crash when source database has a document with empty ID.
-* Fix deadlock when assigning couchjs processes to serve requests.
-* Fixes to the document multipart PUT API.
-* Fixes regarding file descriptor leaks for databases with views.
+ * Support SpiderMonkey 1.8.5
+ * Add configurable maximum to the number of bytes returned by _log.
+ * Allow CommonJS modules to be an empty string.
+ * Bump minimum Erlang version to R13B02.
+ * Do not run deleted validate_doc_update functions.
+ * ETags for views include current sequence if include_docs=true.
+ * Fix bug where duplicates can appear in _changes feed.
+ * Fix bug where update handlers break after conflict resolution.
+ * Fix bug with _replicator where include "filter" could crash couch.
+ * Fix crashes when compacting large views.
+ * Fix file descriptor leak in _log
+ * Fix missing revisions in _changes?style=all_docs.
+ * Improve handling of compaction at max_dbs_open limit.
+ * JSONP responses now send "text/javascript" for Content-Type.
+ * Link to ICU 4.2 on Windows.
+ * Permit forward slashes in path to update functions.
+ * Reap couchjs processes that hit reduce_overflow error.
+ * Status code can be specified in update handlers.
+ * Support provides() in show functions.
+ * _view_cleanup when ddoc has no views now removes all index files.
+ * max_replication_retry_count now supports "infinity".
+ * Fix replication crash when source database has a document with empty ID.
+ * Fix deadlock when assigning couchjs processes to serve requests.
+ * Fixes to the document multipart PUT API.
+ * Fixes regarding file descriptor leaks for databases with views.
 
 Version 1.1.0
 -------------
@@ -108,6 +178,21 @@ This release contains backwards incompatible changes.
    to lack of permissions.
  * Added a "change password"-feature to Futon.
 
+Version 1.0.4
+-------------
+
+ * Fixed CVE-2012-5641: Apache CouchDB Information disclosure via unescaped
+   backslashes in URLs on Windows
+ * Fixed CVE-2012-5649: Apache CouchDB JSONP arbitrary code execution with
+   Adobe Flash
+ * Fixed CVE-2012-5650: Apache CouchDB DOM based Cross-Site Scripting via Futon
+   UI
+ * Fix file descriptor leak in _log.
+ * Fix missing revisions in _changes?style=all_docs.
+ * Fix validation of attachment names.
+ * Avoid invalidating view indexes when running out of file descriptors.
+ * Fix a race condition where replications can go stale
+
 Version 1.0.3
 -------------
 
@@ -122,13 +207,14 @@ Version 1.0.3
  * Fixed OAuth signature computation in OTP R14B02.
  * Handle passwords with : in them.
  * Made compatible with jQuery 1.5.x.
- * Added support for inclusive_end wiht reduce views.
+ * Added support for inclusive_end with reduce views.
  * Etap tests no longer require use of port 5984.
  * Windows builds now require ICU >= 4.4.0 and Erlang >= R14B03.
 
 Version 1.0.2
 -------------
 
+ * Fixed CVE-2010-3854: Apache CouchDB Cross Site Scripting Issue
  * Make test suite work with Safari and Chrome.
  * Fix leaking file handles after compacting databases and views.
  * Fix databases forgetting their validation function after compaction.
@@ -151,14 +237,15 @@ Version 1.0.2
 Version 1.0.1
 -------------
 
-  * Fix data corruption bug COUCHDB-844. Please see
-    http://couchdb.apache.org/notice/1.0.1.html for details.
-  * Added support for replication via an HTTP/HTTPS proxy.
-  * Fixed various replicator bugs for interop with older CouchDB versions.
-  * Show fields saved along with _deleted=true. Allows for auditing of deletes.
-  * Enable basic-auth popup when required to access the server, to prevent
-    people from getting locked out.
-  * User interface element for querying stale (cached) views.
+ * Fixed CVE-2010-2234: Apache CouchDB Cross Site Request Forgery Attack
+ * Fix data corruption bug COUCHDB-844. Please see
+   http://couchdb.apache.org/notice/1.0.1.html for details.
+ * Added support for replication via an HTTP/HTTPS proxy.
+ * Fixed various replicator bugs for interop with older CouchDB versions.
+ * Show fields saved along with _deleted=true. Allows for auditing of deletes.
+ * Enable basic-auth popup when required to access the server, to prevent
+   people from getting locked out.
+ * User interface element for querying stale (cached) views.
 
 Version 1.0.0
 -------------
@@ -174,12 +261,12 @@ Version 1.0.0
 Version 0.11.2
 --------------
 
-  * Replicator buxfixes for replicating design documents from secured databases.
-  * Better error messages on invalid URL requests.
-  * User documents can now be deleted by admins or the user.
-  * Avoid potential DOS attack by guarding all creation of atoms.
-  * Some Futon and JavaScript library bugfixes.
-  * Fixed CVE-2010-2234: Apache CouchDB Cross Site Request Forgery Attack
+ * Fixed CVE-2010-2234: Apache CouchDB Cross Site Request Forgery Attack
+ * Avoid potential DOS attack by guarding all creation of atoms.
+ * Replicator buxfixes for replicating design documents from secured databases.
+ * Better error messages on invalid URL requests.
+ * User documents can now be deleted by admins or the user.
+ * Some Futon and JavaScript library bugfixes.
 
 Version 0.11.1
 --------------
@@ -256,6 +343,7 @@ This version is a feature-freeze release candidate for Apache CouchDB 1.0.
  * Avoid leaking file descriptors on automatic replication restarts.
  * Various improvements to the Futon UI.
  * Provide Content-MD5 header support for attachments.
+ * Adds configurable compression of attachments.
  * Added default cookie-authentication and users db.
  * Added per-db reader access control lists.
  * Added per-db security object for configuration data in validation functions.
@@ -285,7 +373,7 @@ Version 0.10.1
 Version 0.10.0
 --------------
 
-This release contains backwards incompatible changes
+This release contains backwards incompatible changes.
 
  * General performance improvements.
  * View index generation speedups.

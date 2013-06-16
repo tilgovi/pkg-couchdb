@@ -130,7 +130,7 @@ compact_loop(Parent) ->
 
 
 maybe_compact_db(DbName, Config) ->
-    case (catch couch_db:open_int(DbName, [])) of
+    case (catch couch_db:open_int(DbName, [{user_ctx, #user_ctx{roles=[<<"_admin">>]}}])) of
     {ok, Db} ->
         DDocNames = db_ddoc_names(Db),
         case can_db_compact(Config, Db) of
@@ -224,17 +224,16 @@ db_ddoc_names(Db) ->
 
 maybe_compact_view(DbName, GroupId, Config) ->
     DDocId = <<"_design/", GroupId/binary>>,
-    case (catch couch_view:get_group_info(DbName, DDocId)) of
+    case (catch couch_mrview:get_info(DbName, DDocId)) of
     {ok, GroupInfo} ->
         case can_view_compact(Config, DbName, GroupId, GroupInfo) of
         true ->
-            {ok, CompactPid} = couch_view_compactor:start_compact(DbName, GroupId),
+            {ok, MonRef} = couch_mrview:compact(DbName, DDocId, [monitor]),
             TimeLeft = compact_time_left(Config),
-            MonRef = erlang:monitor(process, CompactPid),
             receive
-            {'DOWN', MonRef, process, CompactPid, normal} ->
+            {'DOWN', MonRef, process, _, normal} ->
                 ok;
-            {'DOWN', MonRef, process, CompactPid, Reason} ->
+            {'DOWN', MonRef, process, _, Reason} ->
                 ?LOG_ERROR("Compaction daemon - an error ocurred while compacting"
                     " the view group `~s` from database `~s`: ~p",
                     [GroupId, DbName, Reason]),
@@ -244,7 +243,7 @@ maybe_compact_view(DbName, GroupId, Config) ->
                     "view group `~s` of the database `~s` because it's exceeding"
                     " the allowed period.", [GroupId, DbName]),
                 erlang:demonitor(MonRef, [flush]),
-                ok = couch_view_compactor:cancel_compact(DbName, GroupId),
+                ok = couch_mrview:cancel_compaction(DbName, DDocId),
                 timeout
             end;
         false ->
@@ -303,7 +302,7 @@ can_db_compact(#config{db_frag = Threshold} = Config, Db) ->
             true ->
                 true;
             false ->
-                ?LOG_INFO("Compaction daemon - skipping database `~s` "
+                ?LOG_WARN("Compaction daemon - skipping database `~s` "
                     "compaction: the estimated necessary disk space is about ~p"
                     " bytes but the currently available disk space is ~p bytes.",
                    [Db#db.name, SpaceRequired, Free]),
@@ -329,12 +328,12 @@ can_view_compact(Config, DbName, GroupId, GroupInfo) ->
             false ->
                 false;
             true ->
-                Free = free_space(couch_config:get("couchdb", "view_index_dir")),
+                Free = free_space(couch_index_util:root_dir()),
                 case Free >= SpaceRequired of
                 true ->
                     true;
                 false ->
-                    ?LOG_INFO("Compaction daemon - skipping view group `~s` "
+                    ?LOG_WARN("Compaction daemon - skipping view group `~s` "
                         "compaction (database `~s`): the estimated necessary "
                         "disk space is about ~p bytes but the currently available"
                         " disk space is ~p bytes.",

@@ -62,8 +62,8 @@ revid_to_str(RevId) ->
 
 rev_to_str({Pos, RevId}) ->
     ?l2b([integer_to_list(Pos),"-",revid_to_str(RevId)]).
-                    
-                    
+
+
 revs_to_strs([]) ->
     [];
 revs_to_strs([{Pos, RevId}| Rest]) ->
@@ -188,6 +188,8 @@ parse_revs([Rev | Rest]) ->
     [parse_rev(Rev) | parse_revs(Rest)].
 
 
+validate_docid(<<"">>) ->
+    throw({bad_request, <<"Document id must not be empty">>});
 validate_docid(Id) when is_binary(Id) ->
     case couch_util:validate_utf8(Id) of
         false -> throw({bad_request, <<"Document id must be valid UTF-8">>});
@@ -423,7 +425,7 @@ merge_stubs(#doc{id=Id,atts=MemBins}=StubsDoc, #doc{atts=DiskBins}) ->
     MergedBins = lists:map(
         fun(#att{name=Name, data=stub, revpos=StubRevPos}) ->
             case dict:find(Name, BinDict) of
-            {ok, #att{revpos=DiskRevPos}=DiskAtt} 
+            {ok, #att{revpos=DiskRevPos}=DiskAtt}
                     when DiskRevPos == StubRevPos orelse StubRevPos == nil ->
                 DiskAtt;
             _ ->
@@ -517,7 +519,7 @@ doc_from_multi_part_stream(ContentType, DataFun) ->
         end),
     Ref = make_ref(),
     Parser ! {get_doc_bytes, Ref, self()},
-    receive 
+    receive
     {doc_bytes, Ref, DocBytes} ->
         Doc = from_json_obj(?JSON_DECODE(DocBytes)),
         % go through the attachments looking for 'follows' in the data,
