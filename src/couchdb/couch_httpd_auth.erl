@@ -26,7 +26,7 @@ special_test_authentication_handler(Req) ->
     case header_value(Req, "WWW-Authenticate") of
     "X-Couch-Test-Auth " ++ NamePass ->
         % NamePass is a colon separated string: "joe schmoe:a password".
-        [Name, Pass] = re:split(NamePass, ":", [{return, list}]),
+        [Name, Pass] = re:split(NamePass, ":", [{return, list}, {parts, 2}]),
         case {Name, Pass} of
         {"Jan Lehnardt", "apple"} -> ok;
         {"Christopher Lenz", "dog food"} -> ok;
@@ -47,14 +47,13 @@ basic_name_pw(Req) ->
     AuthorizationHeader = header_value(Req, "Authorization"),
     case AuthorizationHeader of
     "Basic " ++ Base64Value ->
-        case string:tokens(?b2l(base64:decode(Base64Value)),":") of
+        case re:split(base64:decode(Base64Value), ":",
+                      [{return, list}, {parts, 2}]) of
         ["_", "_"] ->
             % special name and pass to be logged out
             nil;
         [User, Pass] ->
             {User, Pass};
-        [User | Pass] ->
-            {User, string:join(Pass, ":")};
         _ ->
             nil
         end;
@@ -69,10 +68,7 @@ default_authentication_handler(Req) ->
             nil ->
                 throw({unauthorized, <<"Name or password is incorrect.">>});
             UserProps ->
-                UserSalt = couch_util:get_value(<<"salt">>, UserProps, <<>>),
-                PasswordHash = hash_password(?l2b(Pass), UserSalt),
-                ExpectedHash = couch_util:get_value(<<"password_sha">>, UserProps, nil),
-                case couch_util:verify(ExpectedHash, PasswordHash) of
+                case authenticate(?l2b(Pass), UserProps) of
                     true ->
                         Req#httpd{user_ctx=#user_ctx{
                             name=?l2b(User),
@@ -161,9 +157,10 @@ cookie_authentication_handler(#httpd{mochi_req=MochiReq}=Req) ->
     undefined -> Req;
     [] -> Req;
     Cookie ->
-        [User, TimeStr | HashParts] = try
+        [User, TimeStr, HashStr] = try
             AuthSession = couch_util:decodeBase64Url(Cookie),
-            [_A, _B | _Cs] = string:tokens(?b2l(AuthSession), ":")
+            [_A, _B, _Cs] = re:split(?b2l(AuthSession), ":",
+                                     [{return, list}, {parts, 3}])
         catch
             _:_Error ->
                 Reason = <<"Malformed AuthSession cookie. Please clear your cookies.">>,
@@ -183,13 +180,13 @@ cookie_authentication_handler(#httpd{mochi_req=MochiReq}=Req) ->
                 UserSalt = couch_util:get_value(<<"salt">>, UserProps, <<"">>),
                 FullSecret = <<Secret/binary, UserSalt/binary>>,
                 ExpectedHash = crypto:sha_mac(FullSecret, User ++ ":" ++ TimeStr),
-                Hash = ?l2b(string:join(HashParts, ":")),
+                Hash = ?l2b(HashStr),
                 Timeout = list_to_integer(
                     couch_config:get("couch_httpd_auth", "timeout", "600")),
                 ?LOG_DEBUG("timeout ~p", [Timeout]),
                 case (catch erlang:list_to_integer(TimeStr, 16)) of
                     TimeStamp when CurrentTime < TimeStamp + Timeout ->
-                        case couch_util:verify(ExpectedHash, Hash) of
+                        case couch_passwords:verify(ExpectedHash, Hash) of
                             true ->
                                 TimeLeft = TimeStamp + Timeout - CurrentTime,
                                 ?LOG_DEBUG("Successful cookie auth as: ~p", [User]),
@@ -234,9 +231,6 @@ cookie_auth_cookie(Req, User, Secret, TimeStamp) ->
         couch_util:encodeBase64Url(SessionData ++ ":" ++ ?b2l(Hash)),
         [{path, "/"}] ++ cookie_scheme(Req) ++ max_age()).
 
-hash_password(Password, Salt) ->
-    ?l2b(couch_util:to_hex(crypto:sha(<<Password/binary, Salt/binary>>))).
-
 ensure_cookie_auth_secret() ->
     case couch_config:get("couch_httpd_auth", "secret", nil) of
         nil ->
@@ -270,9 +264,7 @@ handle_session_req(#httpd{method='POST', mochi_req=MochiReq}=Req) ->
         Result -> Result
     end,
     UserSalt = couch_util:get_value(<<"salt">>, User, <<>>),
-    PasswordHash = hash_password(Password, UserSalt),
-    ExpectedHash = couch_util:get_value(<<"password_sha">>, User, nil),
-    case couch_util:verify(ExpectedHash, PasswordHash) of
+    case authenticate(Password, User) of
         true ->
             % setup the session cookie
             Secret = ?l2b(ensure_cookie_auth_secret()),
@@ -294,7 +286,13 @@ handle_session_req(#httpd{method='POST', mochi_req=MochiReq}=Req) ->
         _Else ->
             % clear the session
             Cookie = mochiweb_cookies:cookie("AuthSession", "", [{path, "/"}] ++ cookie_scheme(Req)),
-            send_json(Req, 401, [Cookie], {[{error, <<"unauthorized">>},{reason, <<"Name or password is incorrect.">>}]})
+            {Code, Headers} = case couch_httpd:qs_value(Req, "fail", nil) of
+                nil ->
+                    {401, [Cookie]};
+                Redirect ->
+                    {302, [Cookie, {"Location", couch_httpd:absolute_uri(Req, Redirect)}]}
+            end,
+            send_json(Req, Code, Headers, {[{error, <<"unauthorized">>},{reason, <<"Name or password is incorrect.">>}]})
     end;
 % get user info
 % GET /_session
@@ -337,6 +335,20 @@ handle_session_req(Req) ->
 maybe_value(_Key, undefined, _Fun) -> [];
 maybe_value(Key, Else, Fun) ->
     [{Key, Fun(Else)}].
+
+authenticate(Pass, UserProps) ->
+    UserSalt = couch_util:get_value(<<"salt">>, UserProps, <<>>),
+    {PasswordHash, ExpectedHash} =
+        case couch_util:get_value(<<"password_scheme">>, UserProps, <<"simple">>) of
+        <<"simple">> ->
+            {couch_passwords:simple(Pass, UserSalt),
+            couch_util:get_value(<<"password_sha">>, UserProps, nil)};
+        <<"pbkdf2">> ->
+            Iterations = couch_util:get_value(<<"iterations">>, UserProps, 10000),
+            {couch_passwords:pbkdf2(Pass, UserSalt, Iterations),
+             couch_util:get_value(<<"derived_key">>, UserProps, nil)}
+    end,
+    couch_passwords:verify(PasswordHash, ExpectedHash).
 
 auth_name(String) when is_list(String) ->
     [_,_,_,_,_,Name|_] = re:split(String, "[\\W_]", [{return, list}]),

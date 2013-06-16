@@ -1,6 +1,151 @@
 Apache CouchDB CHANGES
 ======================
 
+Version 1.3.1
+-------------
+
+Replicator:
+
+ * Tolerate missing source and target fields in _replicator docs (COUCHDB-1788).
+
+Log System:
+
+ * Don't log about missing .compact files.
+ * Fix bug in WARN level logging from 1.3.0 (COUCHDB-1794).
+
+View Server:
+
+ * Fix the -S option to couchjs to increase memory limits (COUCHDB-1792).
+
+Misc:
+
+ * Improve documentation: better structure, improve language, less duplication.
+ * Improvements to test suite and VPATH build system.
+
+Version 1.3.0
+-------------
+
+HTTP Interface:
+
+ * No longer rewrites the X-CouchDB-Requested-Path during recursive calls to the
+   rewriter.
+ * Limit recursion depth in the URL rewriter. Defaults to a maximum of 100
+   invocations but is configurable.
+ * Fix _session for IE7.
+ * Added Server-Sent Events protocol to db changes API. See
+   http://www.w3.org/TR/eventsource/ for details.
+ * Make password hashing synchronous when using the /_config/admins API.
+ * Include user name in show/list ETags.
+ * Experimental support for Cross-Origin Resource Sharing (CORS). See 
+   http://www.w3.org/TR/cors/ for details.
+
+Replicator:
+
+ * The replicator will use a new server-wide UUID in checkpoint IDs to
+   improve the chances of an efficient resume.
+
+Storage System:
+
+ * Fixed unnecessary conflict when deleting and creating a
+   document in the same batch.
+
+View Server:
+
+ * Additional response headers may be varied prior to send().
+ * GetRow() is now side-effect free.
+
+Futon:
+
+ * Disabled the link to the Futon test suite. These tests were causing problems
+   when run from a browser, and are now available via the CLI instead.
+ * Added view request duration to Futon.
+ * Disable buttons for actions that the user doesn't have permissions to.
+
+Docs:
+
+ * Import initial documentation and converted to RST format.
+ * Set up Sphinx configuration and integrated into the build system.
+ * Serve up HTML manual from Futon, with a link in the sidebar.
+ * PDF and info version of the manual also installed.
+  
+Security:
+
+ * Passwords are now hashed using the PBKDF2 algorithm with a configurable work
+   factor.
+
+Test Suite:
+
+ * Moved the JS test suite to the CLI.
+ * Improved tracebacks printed by the JS CLI tests.
+ * Improved the reliability of a number of tests.
+
+UUID Algorithms:
+
+ * Added the utc_id algorithm.
+
+URL Rewriter & Vhosts:
+
+ * Database name is encoded during rewriting (allowing embedded /'s, etc).
+ * Reset rewrite counter on new request, avoiding unnecessary request failures
+   due to bogus rewrite limit reports.
+
+Build System:
+
+ * C/C++ compiler detection has been improved.
+ * Autoconf v2.63 is now required if building from Git checkout directly. See
+   DEVELOPERS file for more details.
+ * Fixed issue in couchdb script where stopped status returns before process
+   exits.
+
+Version 1.2.2
+-------------
+
+HTTP Interface:
+
+ * Reset rewrite counter on new request, avoiding unnecessary request failures
+   due to bogus rewrite limit reports.
+
+Build System:
+
+ * Fixed issue in couchdb script where stopped status returns before process
+   exits.
+
+Version 1.2.1
+-------------
+
+Security:
+
+ * Fixed CVE-2012-5641: Apache CouchDB Information disclosure via unescaped
+   backslashes in URLs on Windows
+ * Fixed CVE-2012-5649: Apache CouchDB JSONP arbitrary code execution with Adobe
+   Flash
+ * Fixed CVE-2012-5650: Apache CouchDB DOM based Cross-Site Scripting via Futon
+   UI
+
+HTTP Interface:
+
+ * No longer rewrites the X-CouchDB-Requested-Path during recursive
+   calls to the rewriter.
+ * Limit recursion depth in the URL rewriter. Defaults to a maximum
+   of 100 invocations but is configurable.
+
+Build System:
+
+ * Fix couchdb start script.
+ * Win: fix linker invocations.
+
+Futon:
+
+ * Disable buttons that aren't available for the logged-in user.
+
+Replication:
+
+ * Fix potential timeouts.
+
+View System:
+
+ * Change use of signals to avoid broken view groups.
+
 Version 1.2.0
 -------------
 
@@ -86,7 +231,8 @@ View Server:
    configuration is matched.
  * Fixed incorrect reduce query results when using pagination parameters.
  * Made icu_driver work with Erlang R15B and later.
- * Avoid invalidating view indexes when running out of file descriptors.
+ * Avoid invalidating view indexes when running out of file descriptors
+   (COUCHDB-1445).
 
 OAuth:
 
@@ -104,34 +250,87 @@ Log System:
  * Log correct stacktrace in all cases.
  * Improvements to log messages for file-related errors.
 
+Version 1.1.2
+-------------
+
+Security:
+
+ * Fixed CVE-2012-5641: Apache CouchDB Information disclosure via unescaped
+   backslashes in URLs on Windows
+ * Fixed CVE-2012-5649: Apache CouchDB JSONP arbitrary code execution with
+   Adobe Flash
+ * Fixed CVE-2012-5650: Apache CouchDB DOM based Cross-Site Scripting via Futon
+   UI
+
+HTTP Interface:
+
+ * ETag of attachment changes only when the attachment changes, not
+   the document.
+ * Fix retrieval of headers larger than 4k.
+ * Allow OPTIONS HTTP method for list requests.
+ * Don't attempt to encode invalid json.
+
+Replicator:
+
+ * Fix pull replication of documents with many revisions.
+ * Fix replication from an HTTP source to an HTTP target.
+
+View Server:
+
+ * Avoid invalidating view indexes when running out of file descriptors.
+
+Log System:
+
+ * Improvements to log messages for file-related errors.
+
+Build System:
+
+ * Don't `ln` the `couchjs` install target on Windows
+ * Remove ICU version dependency on Windows.
+ * Improve SpiderMonkey version detection.
+
 Version 1.1.1
 -------------
 
-* Support SpiderMonkey 1.8.5
-* Add configurable maximum to the number of bytes returned by _log.
-* Allow CommonJS modules to be an empty string.
-* Bump minimum Erlang version to R13B02.
-* Do not run deleted validate_doc_update functions.
-* ETags for views include current sequence if include_docs=true.
-* Fix bug where duplicates can appear in _changes feed.
-* Fix bug where update handlers break after conflict resolution.
-* Fix bug with _replicator where include "filter" could crash couch.
-* Fix crashes when compacting large views.
-* Fix file descriptor leak in _log
-* Fix missing revisions in _changes?style=all_docs.
-* Improve handling of compaction at max_dbs_open limit.
-* JSONP responses now send "text/javascript" for Content-Type.
-* Link to ICU 4.2 on Windows.
-* Permit forward slashes in path to update functions.
-* Reap couchjs processes that hit reduce_overflow error.
-* Status code can be specified in update handlers.
-* Support provides() in show functions.
-* _view_cleanup when ddoc has no views now removes all index files.
-* max_replication_retry_count now supports "infinity".
-* Fix replication crash when source database has a document with empty ID.
-* Fix deadlock when assigning couchjs processes to serve requests.
-* Fixes to the document multipart PUT API.
-* Fixes regarding file descriptor leaks for databases with views.
+HTTP Interface:
+
+ * Add configurable maximum to the number of bytes returned by _log.
+ * ETags for views include current sequence if include_docs=true.
+ * Fix bug where duplicates can appear in _changes feed.
+ * Fix missing revisions in _changes?style=all_docs.
+ * JSONP responses now send "text/javascript" for Content-Type.
+ * Permit forward slashes in path to update functions.
+ * Status code can be specified in update handlers.
+ * _view_cleanup when ddoc has no views now removes all index files.
+ * Fixes to the document multipart PUT API.
+
+Core Database:
+
+ * Fixes regarding file descriptor leaks for databases with views.
+ * Fix bug where update handlers break after conflict resolution.
+ * Fix file descriptor leak in _log
+ * Improve handling of compaction at max_dbs_open limit.
+ * Fix crashes when compacting large views.
+
+Query Server:
+
+ * Support SpiderMonkey 1.8.5
+ * Support provides() in show functions.
+ * Fix deadlock when assigning couchjs processes to serve requests.
+ * Allow CommonJS modules to be an empty string.
+ * Reap couchjs processes that hit reduce_overflow error.
+
+Replicator:
+
+ * max_replication_retry_count now supports "infinity".
+ * Fix replication crash when source database has a document with empty ID.
+ * Fix bug with _replicator where include "filter" could crash couch.
+
+Misc:
+
+ * Bump minimum Erlang version to R13B02.
+ * Link to ICU 4.2 on Windows.
+ * Do not run deleted validate_doc_update functions.
 
 Version 1.1.0
 -------------
@@ -188,6 +387,35 @@ URL Rewriter & Vhosts:
 
  * Fix for variable substituion
 
+Version 1.0.4
+-------------
+
+Security:
+
+ * Fixed CVE-2012-5641: Apache CouchDB Information disclosure via unescaped
+   backslashes in URLs on Windows
+ * Fixed CVE-2012-5649: Apache CouchDB JSONP arbitrary code execution with
+   Adobe Flash
+ * Fixed CVE-2012-5650: Apache CouchDB DOM based Cross-Site Scripting via Futon
+   UI
+
+Log System:
+
+ * Fix file descriptor leak in _log.
+
+HTTP Interface:
+
+ * Fix missing revisions in _changes?style=all_docs.
+ * Fix validation of attachment names.
+
+View System:
+
+ * Avoid invalidating view indexes when running out of file descriptors.
+
+Replicator:
+
+ * Fix a race condition where replications can go stale
+
 Version 1.0.3
 -------------
 
@@ -236,6 +464,10 @@ Windows:
 
 Version 1.0.2
 -------------
+
+Security:
+
+ * Fixed CVE-2010-3854: Apache CouchDB Cross Site Scripting Issue
 
 Futon:
 
@@ -296,35 +528,39 @@ View Server:
 Version 1.0.1
 -------------
 
+Security:
+
+ * Fixed CVE-2010-2234: Apache CouchDB Cross Site Request Forgery Attack
+
 Storage System:
 
-  * Fix data corruption bug COUCHDB-844. Please see
-    http://couchdb.apache.org/notice/1.0.1.html for details.
+ * Fix data corruption bug COUCHDB-844. Please see
+   http://couchdb.apache.org/notice/1.0.1.html for details.
 
 Replicator:
 
-  * Added support for replication via an HTTP/HTTPS proxy.
-  * Fix pull replication of attachments from 0.11 to 1.0.x.
-  * Make the _changes feed work with non-integer seqnums.
+ * Added support for replication via an HTTP/HTTPS proxy.
+ * Fix pull replication of attachments from 0.11 to 1.0.x.
+ * Make the _changes feed work with non-integer seqnums.
 
 HTTP Interface:
 
-  * Expose `committed_update_seq` for monitoring purposes.
-  * Show fields saved along with _deleted=true. Allows for auditing of deletes.
-  * More robust Accept-header detection.
+ * Expose `committed_update_seq` for monitoring purposes.
+ * Show fields saved along with _deleted=true. Allows for auditing of deletes.
+ * More robust Accept-header detection.
 
 Authentication:
 
-  * Enable basic-auth popup when required to access the server, to prevent
-    people from getting locked out.
+ * Enable basic-auth popup when required to access the server, to prevent
+   people from getting locked out.
 
 Futon:
 
-  * User interface element for querying stale (cached) views.
+ * User interface element for querying stale (cached) views.
 
 Build and System Integration:
 
-  * Included additional source files for distribution.
+ * Included additional source files for distribution.
 
 Version 1.0.0
 -------------
@@ -350,28 +586,29 @@ View Server:
 Version 0.11.2
 --------------
 
+Security:
+
+ * Fixed CVE-2010-2234: Apache CouchDB Cross Site Request Forgery Attack
+ * Avoid potential DOS attack by guarding all creation of atoms.
+
 Replicator:
 
-  * Fix bug when pushing design docs by non-admins, which was hanging the
-    replicator for no good reason.
-  * Fix bug when pulling design documents from a source that requires
-    basic-auth.
+ * Fix bug when pushing design docs by non-admins, which was hanging the
+   replicator for no good reason.
+ * Fix bug when pulling design documents from a source that requires
+   basic-auth.
 
 HTTP Interface:
 
-  * Better error messages on invalid URL requests.
+ * Better error messages on invalid URL requests.
 
 Authentication:
 
-  * User documents can now be deleted by admins or the user.
-
-Security:
-
-  * Avoid potential DOS attack by guarding all creation of atoms.
+ * User documents can now be deleted by admins or the user.
 
 Futon:
 
-  * Add some Futon files that were missing from the Makefile.
+ * Add some Futon files that were missing from the Makefile.
 
 Version 0.11.1
 --------------
@@ -547,6 +784,21 @@ Build and System Integration:
  * Gavin McDonald setup a build-bot instance. More info can be found at
    http://ci.apache.org/buildbot.html
 
+Version 0.10.2
+--------------
+
+Security:
+
+ * Fixed CVE-2010-0009: Apache CouchDB Timing Attack Vulnerability
+
+Replicator:
+
+ * Avoid leaking file descriptors on automatic replication restarts.
+
+Build and System Integration:
+
+ * Fixed distribution preparation for building on Mac OS X.
+
 Version 0.10.1
 --------------
 
@@ -652,7 +904,7 @@ Replication:
 Version 0.9.0
 -------------
 
-Futon Utility Client:
+Futon:
 
  * Added pagination to the database listing page.
  * Implemented attachment uploading from the document page.

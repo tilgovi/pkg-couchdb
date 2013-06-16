@@ -380,15 +380,40 @@ CouchDB.newXhr = function() {
   }
 };
 
+CouchDB.xhrbody = function(xhr) {
+  if (xhr.responseText) {
+    return xhr.responseText;
+  } else if (xhr.body) {
+    return xhr.body
+  } else {
+    throw new Error("No XMLHTTPRequest support detected");
+  }
+}
+
+CouchDB.xhrheader = function(xhr, header) {
+  if(xhr.getResponseHeader) {
+    return xhr.getResponseHeader(header);
+  } else if(xhr.headers) {
+    return xhr.headers[header] || null;
+  } else {
+    throw new Error("No XMLHTTPRequest support detected");
+  }
+}
+
+CouchDB.proxyUrl = function(uri) {
+  if(uri.substr(0, CouchDB.protocol.length) != CouchDB.protocol) {
+    uri = CouchDB.urlPrefix + uri;
+  }
+  return uri;
+}
+
 CouchDB.request = function(method, uri, options) {
   options = typeof(options) == 'object' ? options : {};
   options.headers = typeof(options.headers) == 'object' ? options.headers : {};
   options.headers["Content-Type"] = options.headers["Content-Type"] || options.headers["content-type"] || "application/json";
   options.headers["Accept"] = options.headers["Accept"] || options.headers["accept"] || "application/json";
   var req = CouchDB.newXhr();
-  if(uri.substr(0, CouchDB.protocol.length) != CouchDB.protocol) {
-    uri = CouchDB.urlPrefix + uri;
-  }
+  uri = CouchDB.proxyUrl(uri);
   req.open(method, uri, false);
   if (options.headers) {
     var headers = options.headers;
@@ -442,7 +467,8 @@ CouchDB.maybeThrowError = function(req) {
     } catch (ParseError) {
       var result = {error:"unknown", reason:req.responseText};
     }
-    throw result;
+
+    throw (new CouchError(result));
   }
 }
 
@@ -457,7 +483,18 @@ CouchDB.params = function(options) {
 };
 // Used by replication test
 if (typeof window == 'undefined' || !window) {
-  CouchDB.host = "127.0.0.1:5984";
+  var hostRE = RegExp("https?://([^\/]+)");
+  var getter = function () {
+    return (new CouchHTTP).base_url.match(hostRE)[1];
+  };
+  if(Object.defineProperty) {
+    Object.defineProperty(CouchDB, "host", {
+      get : getter,
+      enumerable : true
+    });
+  } else {
+    CouchDB.__defineGetter__("host", getter);
+  }
   CouchDB.protocol = "http://";
   CouchDB.inBrowser = false;
 } else {
@@ -465,3 +502,13 @@ if (typeof window == 'undefined' || !window) {
   CouchDB.inBrowser = true;
   CouchDB.protocol = window.location.protocol + "//";
 }
+
+// Turns an {error: ..., reason: ...} response into an Error instance
+function CouchError(error) {
+  var inst = new Error(error.reason);
+  inst.name = 'CouchError';
+  inst.error = error.error;
+  inst.reason = error.reason;
+  return inst;
+}
+CouchError.prototype.constructor = CouchError;

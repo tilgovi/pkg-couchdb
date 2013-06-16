@@ -116,8 +116,17 @@ handle_rewrite_req(#httpd{
 
     % we are in a design handler
     DesignId = <<"_design/", DesignName/binary>>,
-    Prefix = <<"/", DbName/binary, "/", DesignId/binary>>,
+    Prefix = <<"/", (?l2b(couch_util:url_encode(DbName)))/binary, "/", DesignId/binary>>,
     QueryList = lists:map(fun decode_query_value/1, couch_httpd:qs(Req)),
+
+    RewritesSoFar = erlang:get(?REWRITE_COUNT),
+    MaxRewrites = list_to_integer(couch_config:get("httpd", "rewrite_limit", "100")),
+    case RewritesSoFar >= MaxRewrites of
+        true ->
+            throw({bad_request, <<"Exceeded rewrite recursion limit">>});
+        false ->
+            erlang:put(?REWRITE_COUNT, RewritesSoFar + 1)
+    end,
 
     #doc{body={Props}} = DDoc,
 
@@ -165,9 +174,10 @@ handle_rewrite_req(#httpd{
             % normalize final path (fix levels "." and "..")
             RawPath1 = ?b2l(iolist_to_binary(normalize_path(RawPath))),
 
-            % in order to do OAuth correctly,
-            % we have to save the requested path
-            Headers = mochiweb_headers:enter("x-couchdb-requested-path",
+            % In order to do OAuth correctly, we have to save the
+            % requested path. We use default so chained rewriting
+            % wont replace the original header.
+            Headers = mochiweb_headers:default("x-couchdb-requested-path",
                                              MochiReq:get(raw_path),
                                              MochiReq:get(headers)),
 
@@ -188,8 +198,11 @@ handle_rewrite_req(#httpd{
                 design_url_handlers = DesignUrlHandlers,
                 default_fun = DefaultFun,
                 url_handlers = UrlHandlers,
-                user_ctx = UserCtx
+                user_ctx = UserCtx,
+               auth = Auth
             } = Req,
+
+            erlang:put(pre_rewrite_auth, Auth),
             erlang:put(pre_rewrite_user_ctx, UserCtx),
             couch_httpd:handle_request_int(MochiReq1, DefaultFun,
                     UrlHandlers, DbUrlHandlers, DesignUrlHandlers)

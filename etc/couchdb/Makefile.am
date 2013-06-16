@@ -29,24 +29,28 @@ default.ini: default.ini.tpl
 	sed -e "s|%bindir%|.|g" \
 	    -e "s|%localconfdir%|$(localconfdir)|g" \
 	    -e "s|%localdatadir%|../share/couchdb|g" \
-		-e "s|%localbuilddatadir%|../share/couchdb|g" \
+	    -e "s|%localbuilddatadir%|../share/couchdb|g" \
 	    -e "s|%localstatelibdir%|../var/lib/couchdb|g" \
 	    -e "s|%localstatelogdir%|../var/log/couchdb|g" \
 	    -e "s|%localstaterundir%|../var/run/couchdb|g" \
 	    -e "s|%couchprivlibdir%|../lib/couch-$(version)/priv/lib|g" \
 	    -e "s|%couchjs_command_name%|couchjs.exe|g" \
+	    -e "s|%package_author_name%|$(package_author_name)|g" \
+	    -e "s|%version%|$(version)|g" \
 	< $< > $@
 else
 default.ini: default.ini.tpl
 	sed -e "s|%bindir%|$(bindir)|g" \
 	    -e "s|%localconfdir%|$(localconfdir)|g" \
 	    -e "s|%localdatadir%|$(localdatadir)|g" \
-		-e "s|%localbuilddatadir%|$(localdatadir)|g" \
+	    -e "s|%localbuilddatadir%|$(localdatadir)|g" \
 	    -e "s|%localstatelibdir%|$(localstatelibdir)|g" \
 	    -e "s|%localstatelogdir%|$(localstatelogdir)|g" \
 	    -e "s|%localstaterundir%|$(localstaterundir)|g" \
 	    -e "s|%couchprivlibdir%|$(couchprivlibdir)|g" \
 	    -e "s|%couchjs_command_name%|$(couchjs_command_name)|g" \
+	    -e "s|%package_author_name%|$(package_author_name)|g" \
+	    -e "s|%version%|$(version)|g" \
 	< $< > $@
 endif
 
@@ -54,12 +58,14 @@ default_dev.ini: default.ini.tpl
 	sed -e "s|%bindir%|$(abs_top_builddir)/bin|g" \
 	    -e "s|%localconfdir%|$(abs_top_builddir)/etc/couchdb|g" \
 	    -e "s|%localdatadir%|$(abs_top_srcdir)/share|g" \
-		-e "s|%localbuilddatadir%|$(abs_top_builddir)/share|g" \
+	    -e "s|%localbuilddatadir%|$(abs_top_builddir)/share|g" \
 	    -e "s|%localstatelibdir%|$(abs_top_builddir)/tmp/lib|g" \
 	    -e "s|%localstatelogdir%|$(abs_top_builddir)/tmp/log|g" \
 	    -e "s|%localstaterundir%|$(abs_top_builddir)/tmp/run|g" \
 	    -e "s|%couchprivlibdir%|$(devcouchprivlibdir)|g" \
 	    -e "s|%couchjs_command_name%|$(couchjs_dev_command_name)|g" \
+	    -e "s|%package_author_name%|$(package_author_name)|g" \
+	    -e "s|%version%|$(version)|g" \
 	< $< > $@
 
 # Noah said to not specify local.ini but it borks
@@ -67,6 +73,7 @@ default_dev.ini: default.ini.tpl
 local_dev.ini: local.ini
 	if test ! -f "$@"; then \
 	    cp $< $@; \
+	    chmod +w $@; \
 	fi
 
 install-data-hook:

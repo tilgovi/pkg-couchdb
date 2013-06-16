@@ -13,7 +13,7 @@
 -module(couch_server).
 -behaviour(gen_server).
 
--export([open/2,create/2,delete/2,get_version/0]).
+-export([open/2,create/2,delete/2,get_version/0,get_uuid/0]).
 -export([all_databases/0, all_databases/2]).
 -export([init/1, handle_call/3,sup_start_link/0]).
 -export([handle_cast/2,code_change/3,handle_info/2,terminate/2]).
@@ -41,6 +41,15 @@ get_version() ->
         Vsn;
     false ->
         "0.0.0"
+    end.
+
+get_uuid() ->
+    case couch_config:get("couchdb", "uuid", nil) of
+        nil ->
+            UUID = couch_uuids:random(),
+            couch_config:set("couchdb", "uuid", ?b2l(UUID)),
+            UUID;
+        UUID -> ?l2b(UUID)
     end.
 
 get_stats() ->
@@ -80,8 +89,8 @@ maybe_add_sys_db_callbacks(DbName, Options) ->
     case couch_config:get("replicator", "db", "_replicator") of
     DbName ->
         [
-            {before_doc_update, fun couch_replication_manager:before_doc_update/2},
-            {after_doc_read, fun couch_replication_manager:after_doc_read/2},
+            {before_doc_update, fun couch_replicator_manager:before_doc_update/2},
+            {after_doc_read, fun couch_replicator_manager:after_doc_read/2},
             sys_db | Options
         ];
     _ ->
@@ -104,7 +113,7 @@ check_dbname(#server{dbname_regexp=RegExp}, DbName) ->
             "_users" -> ok;
             "_replicator" -> ok;
             _Else ->
-                {error, illegal_database_name}
+                {error, illegal_database_name, DbName}
             end;
     match ->
         ok
@@ -130,14 +139,10 @@ hash_admin_passwords() ->
 
 hash_admin_passwords(Persist) ->
     lists:foreach(
-        fun({_User, "-hashed-" ++ _}) ->
-            ok; % already hashed
-        ({User, ClearPassword}) ->
-            Salt = ?b2l(couch_uuids:random()),
-            Hashed = couch_util:to_hex(crypto:sha(ClearPassword ++ Salt)),
-            couch_config:set("admins",
-                User, "-hashed-" ++ Hashed ++ "," ++ Salt, Persist)
-        end, couch_config:get("admins")).
+        fun({User, ClearPassword}) ->
+            HashedPassword = couch_passwords:hash_admin_password(ClearPassword),
+            couch_config:set("admins", User, ?b2l(HashedPassword), Persist)
+        end, couch_passwords:get_unhashed_admins()).
 
 init([]) ->
     % read config and register for configuration changes
@@ -174,7 +179,7 @@ init([]) ->
     {ok, #server{root_dir=RootDir,
                 dbname_regexp=RegExp,
                 max_dbs_open=MaxDbsOpen,
-                start_time=httpd_util:rfc1123_date()}}.
+                start_time=couch_util:rfc1123_date()}}.
 
 terminate(_Reason, _Srv) ->
     lists:foreach(
@@ -421,27 +426,48 @@ code_change(_OldVsn, State, _Extra) ->
     
 handle_info({'EXIT', _Pid, config_change}, Server) ->
     {noreply, shutdown, Server};
-handle_info({'EXIT', Pid, snappy_nif_not_loaded}, Server) ->
+handle_info({'EXIT', Pid, Reason}, Server) ->
     Server2 = case ets:lookup(couch_dbs_by_pid, Pid) of
     [{Pid, Db}] ->
-        [{Db, {opening, Pid, Froms}}] = ets:lookup(couch_dbs_by_name, Db),
-        Msg = io_lib:format("To open the database `~s`, Apache CouchDB "
-            "must be built with Erlang OTP R13B04 or higher.", [Db]),
-        ?LOG_ERROR(Msg, []),
-        lists:foreach(
-            fun(F) -> gen_server:reply(F, {bad_otp_release, Msg}) end,
-            Froms),
-        true = ets:delete(couch_dbs_by_name, Db),
-        true = ets:delete(couch_dbs_by_pid, Pid),
-        case ets:lookup(couch_sys_dbs, Db) of
+        DbName = Db#db.name,
+
+        % If the Pid is known, the name should be as well.
+        % If not, that's an error, which is why there is no [] clause.
+        case ets:lookup(couch_dbs_by_name, DbName) of
+        [{_, {opening, Pid, Froms}}] ->
+            Msg = case Reason of
+            snappy_nif_not_loaded ->
+                io_lib:format(
+                    "To open the database `~s`, Apache CouchDB "
+                    "must be built with Erlang OTP R13B04 or higher.",
+                    [Db]
+                );
+            true ->
+                io_lib:format("Error opening database ~p: ~p", [DbName, Reason])
+            end,
+            ?LOG_ERROR(Msg, []),
+            lists:foreach(
+              fun(F) -> gen_server:reply(F, {bad_otp_release, Msg}) end,
+              Froms
+            );
+        [{_, {opened, Pid, LruTime}}] ->
+            ?LOG_ERROR(
+                "Unexpected exit of database process ~p [~p]: ~p",
+                [Pid, DbName, Reason]
+            ),
+            true = ets:delete(couch_dbs_by_lru, LruTime)
+        end,
+
+        true = ets:delete(couch_dbs_by_pid, DbName),
+        true = ets:delete(couch_dbs_by_name, DbName),
+
+        case ets:lookup(couch_sys_dbs, DbName) of
         [{Db, _}] ->
-            true = ets:delete(couch_sys_dbs, Db),
+            true = ets:delete(couch_sys_dbs, DbName),
             Server;
         [] ->
             Server#server{dbs_open = Server#server.dbs_open - 1}
-        end;
-    _ ->
-        Server
+        end
     end,
     {noreply, Server2};
 handle_info(Error, _Server) ->

@@ -17,11 +17,8 @@
 
 main(_) ->
     test_util:init_code_path(),
-    etap:plan(50),
     Modules = [
         couch_auth_cache,
-        couch_api_wrap,
-        couch_api_wrap_httpc,
         couch_btree,
         couch_changes,
         couch_compress,
@@ -42,22 +39,13 @@ main(_) ->
         couch_httpd_db,
         couch_httpd_external,
         couch_httpd_misc_handlers,
-        couch_httpd_replicator,
         couch_httpd_rewrite,
-        couch_httpd_show,
         couch_httpd_stats_handlers,
-        couch_httpd_view,
         couch_key_tree,
         couch_log,
         couch_os_process,
         couch_query_servers,
         couch_ref_counter,
-        couch_replication_manager,
-        couch_replication_notifier,
-        couch_replicator,
-        couch_replicator_worker,
-        couch_replicator_utils,
-        couch_rep_sup,
         couch_server,
         couch_server_sup,
         couch_stats_aggregator,
@@ -65,17 +53,14 @@ main(_) ->
         couch_stream,
         couch_task_status,
         couch_util,
-        couch_view,
-        couch_view_compactor,
-        couch_view_group,
-        couch_view_updater,
         couch_work_queue,
         json_stream_parse
     ],
 
+    etap:plan(length(Modules)),
     lists:foreach(
         fun(Module) ->
-            etap_can:loaded_ok(
+            etap:loaded_ok(
                 Module,
                 lists:concat(["Loaded: ", Module])
             )

@@ -14,6 +14,13 @@ couchTests.users_db_security = function(debug) {
   var usersDb = new CouchDB("test_suite_users", {"X-Couch-Full-Commit":"false"});
   if (debug) debugger;
 
+  function wait(ms) {
+    var t0 = new Date(), t1;
+    do {
+      CouchDB.request("GET", "/");
+      t1 = new Date();
+    } while ((t1 - t0) <= ms);
+  }
 
   var loginUser = function(username) {
     var pws = {
@@ -25,7 +32,6 @@ couchTests.users_db_security = function(debug) {
     };
     var username1 = username.replace(/[0-9]$/, "");
     var password = pws[username];
-    //console.log("Logging in '" + username1 + "' with password '" + password + "'");
     T(CouchDB.login(username1, pws[username]).ok);
   };
 
@@ -76,9 +82,9 @@ couchTests.users_db_security = function(debug) {
     usersDb.deleteDb();
 
     // _users db
-    // a doc with a field 'password' should be hashed to 'password_sha'
+    // a doc with a field 'password' should be hashed to 'derived_key'
     //  with salt and salt stored in 'salt', 'password' is set to null.
-    //  Exising 'password_sha' and 'salt' fields are overwritten with new values
+    //  Exising 'derived_key' and 'salt' fields are overwritten with new values
     //  when a non-null 'password' field exists.
     // anonymous should be able to create a user document
     var userDoc = {
@@ -92,13 +98,17 @@ couchTests.users_db_security = function(debug) {
     // jan's gonna be admin as he's the first user
     TEquals(true, usersDb.save(userDoc).ok, "should save document");
     userDoc = usersDb.open("org.couchdb.user:jchris");
-    console.log(userDoc);
     TEquals(undefined, userDoc.password, "password field should be null 1");
-    TEquals(40, userDoc.password_sha.length, "password_sha should exist");
+    TEquals(40, userDoc.derived_key.length, "derived_key should exist");
     TEquals(32, userDoc.salt.length, "salt should exist");
 
     // create server admin
     run_on_modified_server([
+        {
+          section: "couch_httpd_auth",
+          key: "iterations",
+          value: "1"
+        },
         {
           section: "admins",
           key: "jan",
@@ -130,15 +140,16 @@ couchTests.users_db_security = function(debug) {
       jchrisDoc.password = "couch";
 
       TEquals(true, save_as(usersDb, jchrisDoc, "jchris").ok);
+      wait(100);
       var jchrisDoc = open_as(usersDb, "org.couchdb.user:jchris", "jchris1");
 
       TEquals(undefined, jchrisDoc.password, "password field should be null 2");
-      TEquals(40, jchrisDoc.password_sha.length, "password_sha should exist");
+      TEquals(40, jchrisDoc.derived_key.length, "derived_key should exist");
       TEquals(32, jchrisDoc.salt.length, "salt should exist");
 
       TEquals(true, userDoc.salt != jchrisDoc.salt, "should have new salt");
-      TEquals(true, userDoc.password_sha != jchrisDoc.password_sha,
-        "should have new password_sha");
+      TEquals(true, userDoc.derived_key != jchrisDoc.derived_key,
+        "should have new derived_key");
 
       // user should not be able to read another user's user document
       var fdmananaDoc = {
@@ -157,7 +168,7 @@ couchTests.users_db_security = function(debug) {
         "should not_found opening another user's user doc");
 
 
-      // save a db admin
+      // save a db amin 
       var benoitcDoc = {
         _id: "org.couchdb.user:benoitc",
         type: "user",
@@ -250,6 +261,8 @@ couchTests.users_db_security = function(debug) {
   usersDb.deleteDb();
   run_on_modified_server(
     [{section: "couch_httpd_auth",
+      key: "iterations", value: "1"},
+     {section: "couch_httpd_auth",
       key: "authentication_db", value: usersDb.name}],
     testFun
   );

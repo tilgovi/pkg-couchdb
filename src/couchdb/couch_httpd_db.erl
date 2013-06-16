@@ -16,12 +16,11 @@
 -export([handle_request/1, handle_compact_req/2, handle_design_req/2,
     db_req/2, couch_doc_open/4,handle_changes_req/2,
     update_doc_result_to_json/1, update_doc_result_to_json/2,
-    handle_design_info_req/3, handle_view_cleanup_req/2]).
+    handle_design_info_req/3]).
 
 -import(couch_httpd,
     [send_json/2,send_json/3,send_json/4,send_method_not_allowed/2,
-    send_response/4,start_json_response/2,start_json_response/3,
-    send_chunk/2,last_chunk/1,end_json_response/1,
+    start_json_response/2,send_chunk/2,last_chunk/1,end_json_response/1,
     start_chunked_response/3, absolute_uri/2, send/2,
     start_response_length/4, send_error/4]).
 
@@ -77,14 +76,23 @@ handle_changes_req1(Req, #db{name=DbName}=Db) ->
 
 handle_changes_req2(Req, Db) ->
     MakeCallback = fun(Resp) ->
-        fun({change, Change, _}, "continuous") ->
+        fun({change, {ChangeProp}=Change, _}, "eventsource") ->
+            Seq = proplists:get_value(<<"seq">>, ChangeProp),
+            send_chunk(Resp, ["data: ", ?JSON_ENCODE(Change),
+                              "\n", "id: ", ?JSON_ENCODE(Seq),
+                              "\n\n"]);
+        ({change, Change, _}, "continuous") ->
             send_chunk(Resp, [?JSON_ENCODE(Change) | "\n"]);
         ({change, Change, Prepend}, _) ->
             send_chunk(Resp, [Prepend, ?JSON_ENCODE(Change)]);
+        (start, "eventsource") ->
+            ok;
         (start, "continuous") ->
             ok;
         (start, _) ->
             send_chunk(Resp, "{\"results\":[\n");
+        ({stop, _EndSeq}, "eventsource") ->
+            end_json_response(Resp);
         ({stop, EndSeq}, "continuous") ->
             send_chunk(
                 Resp,
@@ -101,7 +109,7 @@ handle_changes_req2(Req, Db) ->
             send_chunk(Resp, "\n")
         end
     end,
-    ChangesArgs = parse_changes_query(Req),
+    ChangesArgs = parse_changes_query(Req, Db),
     ChangesFun = couch_changes:handle_changes(ChangesArgs, Req, Db),
     WrapperFun = case ChangesArgs#changes_args.feed of
     "normal" ->
@@ -118,6 +126,15 @@ handle_changes_req2(Req, Db) ->
                     FeedChangesFun(MakeCallback(Resp))
                 end
             )
+        end;
+    "eventsource" ->
+        Headers = [
+            {"Content-Type", "text/event-stream"},
+            {"Cache-Control", "no-cache"}
+        ],
+        {ok, Resp} = couch_httpd:start_chunked_response(Req, 200, Headers),
+        fun(FeedChangesFun) ->
+            FeedChangesFun(MakeCallback(Resp))
         end;
     _ ->
         % "longpoll" or "continuous"
@@ -137,29 +154,22 @@ handle_changes_req2(Req, Db) ->
     )
     end.
 
-handle_compact_req(#httpd{method='POST',path_parts=[DbName,_,Id|_]}=Req, Db) ->
-    ok = couch_db:check_is_admin(Db),
-    couch_httpd:validate_ctype(Req, "application/json"),
-    {ok, _} = couch_view_compactor:start_compact(DbName, Id),
-    send_json(Req, 202, {[{ok, true}]});
-
 handle_compact_req(#httpd{method='POST'}=Req, Db) ->
-    ok = couch_db:check_is_admin(Db),
-    couch_httpd:validate_ctype(Req, "application/json"),
-    {ok, _} = couch_db:start_compact(Db),
-    send_json(Req, 202, {[{ok, true}]});
+    case Req#httpd.path_parts of
+        [_DbName, <<"_compact">>] ->
+            ok = couch_db:check_is_admin(Db),
+            couch_httpd:validate_ctype(Req, "application/json"),
+            {ok, _} = couch_db:start_compact(Db),
+            send_json(Req, 202, {[{ok, true}]});
+        [_DbName, <<"_compact">>, DesignName | _] ->
+            DesignId = <<"_design/", DesignName/binary>>,
+            DDoc = couch_httpd_db:couch_doc_open(
+                Db, DesignId, nil, [ejson_body]
+            ),
+            couch_mrview_http:handle_compact_req(Req, Db, DDoc)
+    end;
 
 handle_compact_req(Req, _Db) ->
-    send_method_not_allowed(Req, "POST").
-
-handle_view_cleanup_req(#httpd{method='POST'}=Req, Db) ->
-    % delete unreferenced index files
-    ok = couch_db:check_is_admin(Db),
-    couch_httpd:validate_ctype(Req, "application/json"),
-    ok = couch_view:cleanup_index_files(Db),
-    send_json(Req, 202, {[{ok, true}]});
-
-handle_view_cleanup_req(Req, _Db) ->
     send_method_not_allowed(Req, "POST").
 
 
@@ -194,14 +204,8 @@ handle_design_info_req(#httpd{
             path_parts=[_DbName, _Design, DesignName, _]
         }=Req, Db, _DDoc) ->
     DesignId = <<"_design/", DesignName/binary>>,
-    {ok, GroupInfoList} = couch_view:get_group_info(Db, DesignId),
-    send_json(Req, 200, {[
-        {name, DesignName},
-        {view_index, {GroupInfoList}}
-    ]});
-
-handle_design_info_req(Req, _Db, _DDoc) ->
-    send_method_not_allowed(Req, "GET").
+    DDoc = couch_httpd_db:couch_doc_open(Db, DesignId, nil, [ejson_body]),
+    couch_mrview_http:handle_info_req(Req, Db, DDoc).
 
 create_db_req(#httpd{user_ctx=UserCtx}=Req, DbName) ->
     ok = couch_httpd:verify_is_server_admin(Req),
@@ -239,7 +243,7 @@ db_req(#httpd{method='GET',path_parts=[_DbName]}=Req, Db) ->
     {ok, DbInfo} = couch_db:get_db_info(Db),
     send_json(Req, {DbInfo});
 
-db_req(#httpd{method='POST',path_parts=[DbName]}=Req, Db) ->
+db_req(#httpd{method='POST',path_parts=[_DbName]}=Req, Db) ->
     couch_httpd:validate_ctype(Req, "application/json"),
     Doc = couch_doc:from_json_obj(couch_httpd:json_body(Req)),
     validate_attachment_names(Doc),
@@ -250,33 +254,7 @@ db_req(#httpd{method='POST',path_parts=[DbName]}=Req, Db) ->
             Doc
     end,
     DocId = Doc2#doc.id,
-    case couch_httpd:qs_value(Req, "batch") of
-    "ok" ->
-        % async_batching
-        spawn(fun() ->
-                case catch(couch_db:update_doc(Db, Doc2, [])) of
-                {ok, _} -> ok;
-                Error ->
-                    ?LOG_INFO("Batch doc error (~s): ~p",[DocId, Error])
-                end
-            end),
-
-        send_json(Req, 202, [], {[
-            {ok, true},
-            {id, DocId}
-        ]});
-    _Normal ->
-        % normal
-        {ok, NewRev} = couch_db:update_doc(Db, Doc2, []),
-        DocUrl = absolute_uri(
-            Req, binary_to_list(<<"/",DbName/binary,"/", DocId/binary>>)),
-        send_json(Req, 201, [{"Location", DocUrl}], {[
-            {ok, true},
-            {id, DocId},
-            {rev, couch_doc:rev_to_str(NewRev)}
-        ]})
-    end;
-
+    update_doc(Req, Db, DocId, Doc2);
 
 db_req(#httpd{path_parts=[_DbName]}=Req, _Db) ->
     send_method_not_allowed(Req, "DELETE,GET,HEAD,POST");
@@ -391,26 +369,6 @@ db_req(#httpd{method='POST',path_parts=[_,<<"_purge">>]}=Req, Db) ->
 db_req(#httpd{path_parts=[_,<<"_purge">>]}=Req, _Db) ->
     send_method_not_allowed(Req, "POST");
 
-db_req(#httpd{method='GET',path_parts=[_,<<"_all_docs">>]}=Req, Db) ->
-    Keys = couch_httpd:qs_json_value(Req, "keys", nil),
-    all_docs_view(Req, Db, Keys);
-
-db_req(#httpd{method='POST',path_parts=[_,<<"_all_docs">>]}=Req, Db) ->
-    couch_httpd:validate_ctype(Req, "application/json"),
-    {Fields} = couch_httpd:json_body_obj(Req),
-    case couch_util:get_value(<<"keys">>, Fields, nil) of
-    nil ->
-        ?LOG_DEBUG("POST to _all_docs with no keys member.", []),
-        all_docs_view(Req, Db, nil);
-    Keys when is_list(Keys) ->
-        all_docs_view(Req, Db, Keys);
-    _ ->
-        throw({bad_request, "`keys` member must be a array."})
-    end;
-
-db_req(#httpd{path_parts=[_,<<"_all_docs">>]}=Req, _Db) ->
-    send_method_not_allowed(Req, "GET,HEAD,POST");
-
 db_req(#httpd{method='POST',path_parts=[_,<<"_missing_revs">>]}=Req, Db) ->
     {JsonDocIdRevs} = couch_httpd:json_body_obj(Req),
     JsonDocIdRevs2 = [{Id, [couch_doc:parse_rev(RevStr) || RevStr <- RevStrs]} || {Id, RevStrs} <- JsonDocIdRevs],
@@ -509,129 +467,6 @@ db_req(#httpd{path_parts=[_, DocId]}=Req, Db) ->
 db_req(#httpd{path_parts=[_, DocId | FileNameParts]}=Req, Db) ->
     db_attachment_req(Req, Db, DocId, FileNameParts).
 
-all_docs_view(Req, Db, Keys) ->
-    case couch_db:is_system_db(Db) of
-    true ->
-        case (catch couch_db:check_is_admin(Db)) of
-        ok ->
-            do_all_docs_view(Req, Db, Keys);
-        _ ->
-            throw({forbidden, <<"Only admins can access _all_docs",
-                " of system databases.">>})
-        end;
-    false ->
-        do_all_docs_view(Req, Db, Keys)
-    end.
-
-do_all_docs_view(Req, Db, Keys) ->
-    RawCollator = fun(A, B) -> A < B end,
-    #view_query_args{
-        start_key = StartKey,
-        start_docid = StartDocId,
-        end_key = EndKey,
-        end_docid = EndDocId,
-        limit = Limit,
-        skip = SkipCount,
-        direction = Dir,
-        inclusive_end = Inclusive
-    } = QueryArgs
-      = couch_httpd_view:parse_view_params(Req, Keys, map, RawCollator),
-    {ok, Info} = couch_db:get_db_info(Db),
-    CurrentEtag = couch_httpd:make_etag(Info),
-    couch_httpd:etag_respond(Req, CurrentEtag, fun() ->
-
-        TotalRowCount = couch_util:get_value(doc_count, Info),
-        StartId = if is_binary(StartKey) -> StartKey;
-        true -> StartDocId
-        end,
-        EndId = if is_binary(EndKey) -> EndKey;
-        true -> EndDocId
-        end,
-        FoldAccInit = {Limit, SkipCount, undefined, []},
-        UpdateSeq = couch_db:get_update_seq(Db),
-        JsonParams = case couch_httpd:qs_value(Req, "update_seq") of
-        "true" ->
-            [{update_seq, UpdateSeq}];
-        _Else ->
-            []
-        end,
-        case Keys of
-        nil ->
-            FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, CurrentEtag, Db, UpdateSeq,
-                TotalRowCount, #view_fold_helper_funs{
-                    reduce_count = fun couch_db:enum_docs_reduce_to_count/1,
-                    send_row = fun all_docs_send_json_view_row/6
-                }),
-            AdapterFun = fun(#full_doc_info{id=Id}=FullDocInfo, Offset, Acc) ->
-                case couch_doc:to_doc_info(FullDocInfo) of
-                #doc_info{revs=[#rev_info{deleted=false}|_]} = DocInfo ->
-                    FoldlFun({{Id, Id}, DocInfo}, Offset, Acc);
-                #doc_info{revs=[#rev_info{deleted=true}|_]} ->
-                    {ok, Acc}
-                end
-            end,
-            {ok, LastOffset, FoldResult} = couch_db:enum_docs(Db,
-                AdapterFun, FoldAccInit, [{start_key, StartId}, {dir, Dir},
-                    {if Inclusive -> end_key; true -> end_key_gt end, EndId}]),
-            couch_httpd_view:finish_view_fold(Req, TotalRowCount, LastOffset, FoldResult, JsonParams);
-        _ ->
-            FoldlFun = couch_httpd_view:make_view_fold_fun(Req, QueryArgs, CurrentEtag, Db, UpdateSeq,
-                TotalRowCount, #view_fold_helper_funs{
-                    reduce_count = fun(Offset) -> Offset end,
-                    send_row = fun all_docs_send_json_view_row/6
-                }),
-            KeyFoldFun = case Dir of
-            fwd ->
-                fun lists:foldl/3;
-            rev ->
-                fun lists:foldr/3
-            end,
-            FoldResult = KeyFoldFun(
-                fun(Key, FoldAcc) ->
-                    DocInfo = (catch couch_db:get_doc_info(Db, Key)),
-                    Doc = case DocInfo of
-                    {ok, #doc_info{id = Id} = Di} ->
-                        {{Id, Id}, Di};
-                    not_found ->
-                        {{Key, error}, not_found};
-                    _ ->
-                        ?LOG_ERROR("Invalid DocInfo: ~p", [DocInfo]),
-                        throw({error, invalid_doc_info})
-                    end,
-                    {_, FoldAcc2} = FoldlFun(Doc, 0, FoldAcc),
-                    FoldAcc2
-                end, FoldAccInit, Keys),
-            couch_httpd_view:finish_view_fold(Req, TotalRowCount, 0, FoldResult, JsonParams)
-        end
-    end).
-
-all_docs_send_json_view_row(Resp, Db, KV, IncludeDocs, Conflicts, RowFront) ->
-    JsonRow = all_docs_view_row_obj(Db, KV, IncludeDocs, Conflicts),
-    send_chunk(Resp, RowFront ++ ?JSON_ENCODE(JsonRow)),
-    {ok, ",\r\n"}.
-
-all_docs_view_row_obj(_Db, {{DocId, error}, Value}, _IncludeDocs, _Conflicts) ->
-    {[{key, DocId}, {error, Value}]};
-all_docs_view_row_obj(Db, {_KeyDocId, DocInfo}, true, Conflicts) ->
-    case DocInfo of
-    #doc_info{revs = [#rev_info{deleted = true} | _]} ->
-        {all_docs_row(DocInfo) ++ [{doc, null}]};
-    _ ->
-        {all_docs_row(DocInfo) ++ couch_httpd_view:doc_member(
-            Db, DocInfo, if Conflicts -> [conflicts]; true -> [] end)}
-    end;
-all_docs_view_row_obj(_Db, {_KeyDocId, DocInfo}, _IncludeDocs, _Conflicts) ->
-    {all_docs_row(DocInfo)}.
-
-all_docs_row(#doc_info{id = Id, revs = [RevInfo | _]}) ->
-    #rev_info{rev = Rev, deleted = Del} = RevInfo,
-    [ {id, Id}, {key, Id},
-        {value, {[{rev, couch_doc:rev_to_str(Rev)}] ++ case Del of
-            true -> [{deleted, true}];
-            false -> []
-            end}} ].
-
-
 db_doc_req(#httpd{method='DELETE'}=Req, Db, DocId) ->
     % check for the existence of the doc to handle the 404 case.
     couch_doc_open(Db, DocId, nil, []),
@@ -723,29 +558,18 @@ db_doc_req(#httpd{method='POST'}=Req, Db, DocId) ->
     NewDoc = Doc#doc{
         atts = UpdatedAtts ++ OldAtts2
     },
-    {ok, NewRev} = couch_db:update_doc(Db, NewDoc, []),
-
-    send_json(Req, 201, [{"ETag", "\"" ++ ?b2l(couch_doc:rev_to_str(NewRev)) ++ "\""}], {[
-        {ok, true},
-        {id, DocId},
-        {rev, couch_doc:rev_to_str(NewRev)}
-    ]});
+    update_doc(Req, Db, DocId, NewDoc);
 
 db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
-    #doc_query_args{
-        update_type = UpdateType
-    } = parse_doc_query(Req),
     couch_doc:validate_docid(DocId),
 
-    Loc = absolute_uri(Req, "/" ++ ?b2l(Db#db.name) ++ "/" ++ ?b2l(DocId)),
-    RespHeaders = [{"Location", Loc}],
     case couch_util:to_list(couch_httpd:header_value(Req, "Content-Type")) of
     ("multipart/related;" ++ _) = ContentType ->
         {ok, Doc0, WaitFun, Parser} = couch_doc:doc_from_multi_part_stream(
             ContentType, fun() -> receive_request_data(Req) end),
         Doc = couch_doc_from_req(Req, DocId, Doc0),
         try
-            Result = update_doc(Req, Db, DocId, Doc, RespHeaders, UpdateType),
+            Result = update_doc(Req, Db, DocId, Doc),
             WaitFun(),
             Result
         catch throw:Err ->
@@ -754,28 +578,9 @@ db_doc_req(#httpd{method='PUT'}=Req, Db, DocId) ->
             throw(Err)
         end;
     _Else ->
-        case couch_httpd:qs_value(Req, "batch") of
-        "ok" ->
-            % batch
-            Doc = couch_doc_from_req(Req, DocId, couch_httpd:json_body(Req)),
-
-            spawn(fun() ->
-                    case catch(couch_db:update_doc(Db, Doc, [])) of
-                    {ok, _} -> ok;
-                    Error ->
-                        ?LOG_INFO("Batch doc error (~s): ~p",[DocId, Error])
-                    end
-                end),
-            send_json(Req, 202, [], {[
-                {ok, true},
-                {id, DocId}
-            ]});
-        _Normal ->
-            % normal
-            Body = couch_httpd:json_body(Req),
-            Doc = couch_doc_from_req(Req, DocId, Body),
-            update_doc(Req, Db, DocId, Doc, RespHeaders, UpdateType)
-        end
+        Body = couch_httpd:json_body(Req),
+        Doc = couch_doc_from_req(Req, DocId, Body),
+        update_doc(Req, Db, DocId, Doc)
     end;
 
 db_doc_req(#httpd{method='COPY'}=Req, Db, SourceDocId) ->
@@ -788,12 +593,7 @@ db_doc_req(#httpd{method='COPY'}=Req, Db, SourceDocId) ->
     % open old doc
     Doc = couch_doc_open(Db, SourceDocId, SourceRev, []),
     % save new doc
-    {ok, NewTargetRev} = couch_db:update_doc(Db,
-        Doc#doc{id=TargetDocId, revs=TargetRevs}, []),
-    % respond
-    send_json(Req, 201,
-        [{"ETag", "\"" ++ ?b2l(couch_doc:rev_to_str(NewTargetRev)) ++ "\""}],
-        update_doc_result_to_json(TargetDocId, {ok, NewTargetRev}));
+    update_doc(Req, Db, TargetDocId, Doc#doc{id=TargetDocId, revs=TargetRevs});
 
 db_doc_req(Req, _Db, _DocId) ->
     send_method_not_allowed(Req, "DELETE,GET,HEAD,POST,PUT,COPY").
@@ -827,7 +627,7 @@ send_doc_efficiently(#httpd{mochi_req = MochiReq} = Req,
                     [attachments, follows, att_encoding_info | Options])),
             {ContentType, Len} = couch_doc:len_doc_to_multi_part_stream(
                     Boundary,JsonBytes, Atts, true),
-            CType = {<<"Content-Type">>, ContentType},
+            CType = {"Content-Type", ?b2l(ContentType)},
             {ok, Resp} = start_response_length(Req, 200, [CType|Headers], Len),
             couch_doc:doc_to_multi_part_stream(Boundary,JsonBytes,Atts,
                     fun(Data) -> couch_httpd:send(Resp, Data) end, true)
@@ -873,7 +673,7 @@ send_ranges_multipart(Req, ContentType, Len, Att, Ranges) ->
     {ok, Resp} = start_chunked_response(Req, 206, [CType]),
     couch_httpd:send_chunk(Resp, <<"--", Boundary/binary>>),
     lists:foreach(fun({From, To}) ->
-        ContentRange = make_content_range(From, To, Len),
+        ContentRange = ?l2b(make_content_range(From, To, Len)),
         couch_httpd:send_chunk(Resp,
             <<"\r\nContent-Type: ", ContentType/binary, "\r\n",
             "Content-Range: ", ContentRange/binary, "\r\n",
@@ -897,7 +697,7 @@ receive_request_data(_Req, _) ->
     throw(<<"expected more data">>).
 
 make_content_range(From, To, Len) ->
-    ?l2b(io_lib:format("bytes ~B-~B/~B", [From, To, Len])).
+    io_lib:format("bytes ~B-~B/~B", [From, To, Len]).
 
 update_doc_result_to_json({{Id, Rev}, Error}) ->
         {_Code, Err, Msg} = couch_httpd:error_info(Error),
@@ -913,11 +713,17 @@ update_doc_result_to_json(DocId, Error) ->
     {[{id, DocId}, {error, ErrorStr}, {reason, Reason}]}.
 
 
+update_doc(Req, Db, DocId, #doc{deleted=false}=Doc) ->
+    Loc = absolute_uri(Req, "/" ++ ?b2l(Db#db.name) ++ "/" ++ ?b2l(DocId)),
+    update_doc(Req, Db, DocId, Doc, [{"Location", Loc}]);
 update_doc(Req, Db, DocId, Doc) ->
     update_doc(Req, Db, DocId, Doc, []).
 
 update_doc(Req, Db, DocId, Doc, Headers) ->
-    update_doc(Req, Db, DocId, Doc, Headers, interactive_edit).
+    #doc_query_args{
+        update_type = UpdateType
+    } = parse_doc_query(Req),
+    update_doc(Req, Db, DocId, Doc, Headers, UpdateType).
 
 update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers, UpdateType) ->
     case couch_httpd:header_value(Req, "X-Couch-Full-Commit") of
@@ -928,14 +734,33 @@ update_doc(Req, Db, DocId, #doc{deleted=Deleted}=Doc, Headers, UpdateType) ->
     _ ->
         Options = []
     end,
-    {ok, NewRev} = couch_db:update_doc(Db, Doc, Options, UpdateType),
-    NewRevStr = couch_doc:rev_to_str(NewRev),
-    ResponseHeaders = [{"ETag", <<"\"", NewRevStr/binary, "\"">>}] ++ Headers,
-    send_json(Req, if Deleted -> 200; true -> 201 end,
-        ResponseHeaders, {[
+    case couch_httpd:qs_value(Req, "batch") of
+    "ok" ->
+        % async batching
+        spawn(fun() ->
+                case catch(couch_db:update_doc(Db, Doc, Options, UpdateType)) of
+                {ok, _} -> ok;
+                Error ->
+                    ?LOG_INFO("Batch doc error (~s): ~p",[DocId, Error])
+                end
+            end),
+        send_json(Req, 202, Headers, {[
             {ok, true},
-            {id, DocId},
-            {rev, NewRevStr}]}).
+            {id, DocId}
+        ]});
+    _Normal ->
+        % normal
+        {ok, NewRev} = couch_db:update_doc(Db, Doc, Options, UpdateType),
+        NewRevStr = couch_doc:rev_to_str(NewRev),
+        ResponseHeaders = [{"ETag", <<"\"", NewRevStr/binary, "\"">>}] ++ Headers,
+        send_json(Req,
+            if Deleted orelse Req#httpd.method == 'DELETE' -> 200;
+            true -> 201 end,
+            ResponseHeaders, {[
+                {ok, true},
+                {id, DocId},
+                {rev, NewRevStr}]})
+    end.
 
 couch_doc_from_req(Req, DocId, #doc{revs=Revs}=Doc) ->
     validate_attachment_names(Doc),
@@ -966,7 +791,6 @@ couch_doc_from_req(Req, DocId, #doc{revs=Revs}=Doc) ->
     Doc#doc{id=DocId, revs=Revs2};
 couch_doc_from_req(Req, DocId, Json) ->
     couch_doc_from_req(Req, DocId, couch_doc:from_json_obj(Json)).
-
 
 % Useful for debugging
 % couch_doc_open(Db, DocId) ->
@@ -1070,7 +894,7 @@ db_attachment_req(#httpd{method='GET',mochi_req=MochiReq}=Req, Db, DocId, FileNa
                     Ranges = parse_ranges(MochiReq:get(range), Len),
                     case {Enc, Ranges} of
                         {identity, [{From, To}]} ->
-                            Headers1 = [{<<"Content-Range">>, make_content_range(From, To, Len)}]
+                            Headers1 = [{"Content-Range", make_content_range(From, To, Len)}]
                                 ++ Headers,
                             {ok, Resp} = start_response_length(Req, 206, Headers1, To - From + 1),
                             couch_doc:range_att_foldl(Att, From, To + 1,
@@ -1182,25 +1006,18 @@ db_attachment_req(#httpd{method=Method,mochi_req=MochiReq}=Req, Db, DocId, FileN
     DocEdited = Doc#doc{
         atts = NewAtt ++ [A || A <- Atts, A#att.name /= FileName]
     },
-    {ok, UpdatedRev} = couch_db:update_doc(Db, DocEdited, []),
-    #db{name=DbName} = Db,
 
-    {Status, Headers} = case Method of
-        'DELETE' ->
-            {200, []};
-        _ ->
-            {201, [{"ETag", "\"" ++ ?b2l(couch_doc:rev_to_str(UpdatedRev)) ++ "\""},
-               {"Location", absolute_uri(Req, "/" ++
-                binary_to_list(DbName) ++ "/" ++
-                binary_to_list(DocId) ++ "/" ++
-                binary_to_list(FileName)
-            )}]}
-        end,
-    send_json(Req,Status, Headers, {[
-        {ok, true},
-        {id, DocId},
-        {rev, couch_doc:rev_to_str(UpdatedRev)}
-    ]});
+    Headers = case Method of
+    'DELETE' ->
+        [];
+    _ ->
+        [{"Location", absolute_uri(Req, "/" ++
+            ?b2l(Db#db.name) ++ "/" ++
+            ?b2l(DocId) ++ "/" ++
+            ?b2l(FileName)
+        )}]
+    end,
+    update_doc(Req, Db, DocId, DocEdited, Headers);
 
 db_attachment_req(Req, _Db, _DocId, _FileNameParts) ->
     send_method_not_allowed(Req, "DELETE,GET,HEAD,PUT").
@@ -1296,14 +1113,21 @@ parse_doc_query(Req) ->
         end
     end, #doc_query_args{}, couch_httpd:qs(Req)).
 
-parse_changes_query(Req) ->
+parse_changes_query(Req, Db) ->
     lists:foldl(fun({Key, Value}, Args) ->
-        case {Key, Value} of
+        case {string:to_lower(Key), Value} of
         {"feed", _} ->
             Args#changes_args{feed=Value};
         {"descending", "true"} ->
             Args#changes_args{dir=rev};
+        {"since", "now"} ->
+            UpdateSeq = couch_util:with_db(Db#db.name, fun(WDb) ->
+                                        couch_db:get_update_seq(WDb)
+                                end),
+            Args#changes_args{since=UpdateSeq};
         {"since", _} ->
+            Args#changes_args{since=list_to_integer(Value)};
+        {"last-event-id", _} ->
             Args#changes_args{since=list_to_integer(Value)};
         {"limit", _} ->
             Args#changes_args{limit=list_to_integer(Value)};

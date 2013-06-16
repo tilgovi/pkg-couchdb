@@ -112,7 +112,7 @@ couchTests.etags_views = function(debug) {
   restartServer();
   xhr = CouchDB.request("GET", "/test_suite_db/_design/etags/_view/basicView");
   var etag2 = xhr.getResponseHeader("etag");
-  TEquals(etag2, etag1, "etag should be the same after restart 1");
+  T(etag1 == etag2);
 
   // reduce view
   xhr = CouchDB.request("GET", "/test_suite_db/_design/etags/_view/withReduce");
@@ -155,7 +155,7 @@ couchTests.etags_views = function(debug) {
   restartServer();
   xhr = CouchDB.request("GET", "/test_suite_db/_design/etags/_view/withReduce");
   var etag2 = xhr.getResponseHeader("etag");
-  TEquals(etag2, etag1, "etag should be the same after restart 2");
+  T(etag1 == etag2);
 
   // confirm ETag changes with different POST bodies
   xhr = CouchDB.request("POST", "/test_suite_db/_design/etags/_view/basicView",

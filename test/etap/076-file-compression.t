@@ -134,7 +134,8 @@ populate_db(Db, NumDocs) ->
 
 refresh_index() ->
     {ok, Db} = couch_db:open_int(test_db_name(), []),
-    {ok, _, _} = couch_view:get_map_view(Db, ddoc_id(), <<"view1">>, false),
+    {ok, DDoc} = couch_db:open_doc(Db, ddoc_id(), [ejson_body]),
+    couch_mrview:query_view(Db, DDoc, <<"view1">>, [{stale, false}]),
     ok = couch_db:close(Db).
 
 
@@ -154,12 +155,11 @@ compact_db() ->
 
 
 compact_view() ->
-    {ok, CompactPid} = couch_view_compactor:start_compact(test_db_name(), <<"test">>),
-    MonRef = erlang:monitor(process, CompactPid),
+    {ok, MonRef} = couch_mrview:compact(test_db_name(), ddoc_id(), [monitor]),
     receive
-    {'DOWN', MonRef, process, CompactPid, normal} ->
+    {'DOWN', MonRef, process, _CompactPid, normal} ->
         ok;
-    {'DOWN', MonRef, process, CompactPid, Reason} ->
+    {'DOWN', MonRef, process, _CompactPid, Reason} ->
         etap:bail("Error compacting view group: " ++ couch_util:to_list(Reason))
     after 120000 ->
         etap:bail("Timeout waiting for view group compaction")
@@ -175,7 +175,8 @@ db_disk_size() ->
 
 view_disk_size() ->
     {ok, Db} = couch_db:open_int(test_db_name(), []),
-    {ok, Info} = couch_view:get_group_info(Db, ddoc_id()),
+    {ok, DDoc} = couch_db:open_doc(Db, ddoc_id(), [ejson_body]),
+    {ok, Info} = couch_mrview:get_info(Db, DDoc),
     ok = couch_db:close(Db),
     couch_util:get_value(disk_size, Info).
 

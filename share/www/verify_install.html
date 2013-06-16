@@ -20,12 +20,12 @@ specific language governing permissions and limitations under the License.
     <link rel="stylesheet" href="style/layout.css?0.11.0" type="text/css">
     <script src="script/json2.js"></script>
     <script src="script/sha1.js"></script>
-    <script src="script/jquery.js?1.6.2"></script>
-    <script src="script/jquery.couch.js?0.11.0"></script>
-    <script src="script/jquery.dialog.js?0.11.0"></script>
-    <script src="script/futon.js?0.11.0"></script>
-    <script src="script/couch.js?0.11.0"></script>
-    <script src="script/couch_test_runner.js?0.11.0"></script>
+    <script src="script/jquery.js"></script>
+    <script src="script/jquery.couch.js"></script>
+    <script src="script/jquery.dialog.js"></script>
+    <script src="script/futon.js"></script>
+    <script src="script/couch.js"></script>
+    <script src="script/couch_test_runner.js"></script>
     <script>
     $(function($) {
       $("#result").html("");
@@ -45,6 +45,7 @@ specific language governing permissions and limitations under the License.
     }
 
     function tests() {
+      CouchDB.urlPrefix = "..";
       var db = new CouchDB("test_suite_db", {"X-Couch-Full-Commit":"false"});
 
       // cleanup, ignore the 404
@@ -96,7 +97,7 @@ specific language governing permissions and limitations under the License.
         var result = $("#result");
         result.html("Running…");
         tests();
-        result.html("√ Your installation looks fine. Time to Relax.");
+        result.html("Your installation looks fine. Time to Relax.");
       } catch(e) {
         console.log(e);
         result.html("X: " + e);

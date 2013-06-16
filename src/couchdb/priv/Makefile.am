@@ -10,13 +10,22 @@
 ## License for the specific language governing permissions and limitations under
 ## the License.
 
+MAKE_SAFE = $(MAKE)
+
 couchlibdir = $(localerlanglibdir)/couch-$(version)
 couchprivdir = $(couchlibdir)/priv
 couchprivlibdir = $(couchlibdir)/priv/lib
+man1dir = $(mandir)/man1
 
-if HELP2MAN
-dist_man1_MANS = couchjs.1
+man_file = couchjs.1
+
+if BUILD_MAN
+man_file_build = $(man_file)
+else
+man_file_build =
 endif
+
+BUILT_SOURCES = $(man_file_build)
 
 EXTRA_DIST = \
 	spawnkillable/couchspawnkillable.sh \
@@ -24,9 +33,10 @@ EXTRA_DIST = \
 	couch_ejson_compare/erl_nif_compat.h \
 	couch_js/sm170.c \
 	couch_js/sm180.c \
-	couch_js/sm185.c
+	couch_js/sm185.c \
+	$(man_file_build)
 
-CLEANFILES = $(dist_man1_MANS) stat_descriptions.cfg
+CLEANFILES = $(man_file_build) stat_descriptions.cfg
 
 couchprivlib_LTLIBRARIES = couch_icu_driver.la
 if USE_EJSON_COMPARE_NIF
@@ -61,19 +71,29 @@ COUCHJS_SRCS = \
 locallibbin_PROGRAMS = couchjs
 couchjs_SOURCES = $(COUCHJS_SRCS)
 couchjs_CFLAGS = -g -Wall -Werror -D_BSD_SOURCE $(CURL_CFLAGS) $(JS_CFLAGS)
-couchjs_LDFLAGS = $(JS_LDFLAGS)
 couchjs_LDADD = $(CURL_LIBS) $(JS_LIBS)
 
 couchpriv_DATA = stat_descriptions.cfg
 couchpriv_PROGRAMS = couchspawnkillable
 
-HELP2MAN_OPTION=--no-info --help-option="-h" --version-option="-V"
+# Depend on source files so distributed man pages are not rebuilt for end user.
 
-couchjs.1: couchjs
-	touch $@
-	if test -x "$(HELP2MAN_EXECUTABLE)"; then \
-	    $(HELP2MAN_EXECUTABLE) $(HELP2MAN_OPTION) \
-	        --name="$(package_name) JavaScript interpreter" ./couchjs --output $@; \
+$(man_file): $(COUCHJS_SRCS)
+	$(MAKE_SAFE) -f Makefile couchjs; \
+	$(top_srcdir)/build-aux/missing --run \
+	    help2man \
+	        --no-info \
+	        --help-option="-h" \
+	        --version-option="-V" \
+	        --name="$(package_name) JavaScript interpreter" \
+	        ./couchjs --output $@
+
+install-data-local:
+	if test -s $(man_file); then \
+	    if test `cat $(man_file) | wc -l` -gt 1; then \
+	        $(INSTALL) -d $(DESTDIR)$(man1dir); \
+	        $(INSTALL_DATA) $(man_file) $(DESTDIR)$(man1dir)/$(man_file); \
+	    fi \
 	fi
 
 %.cfg: %.cfg.in
@@ -116,6 +136,16 @@ if WINDOWS
 endif
 
 uninstall-local:
+	rm -f $(DESTDIR)$(man1dir)/$(man_file)
 	if test -f "$(DESTDIR)$(couchprivlibdir)/couch_erl_driver"; then \
 	    rm -f "$(DESTDIR)$(couchprivlibdir)/couch_erl_driver.so"; \
+	fi
+
+distcheck-hook:
+	if test ! -s $(man_file); then \
+	    $(top_srcdir)/build-aux/dist-error $(man_file); \
+	else \
+	    if test ! `cat $(man_file) | wc -l` -gt 1; then \
+	        $(top_srcdir)/build-aux/dist-error $(man_file); \
+	    fi \
 	fi

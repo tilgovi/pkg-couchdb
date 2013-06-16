@@ -500,17 +500,19 @@ close_db(#db{fd_ref_counter = RefCntr}) ->
     couch_ref_counter:drop(RefCntr).
 
 
-refresh_validate_doc_funs(Db) ->
-    {ok, DesignDocs} = couch_db:get_design_docs(
-        Db#db{user_ctx = #user_ctx{roles=[<<"_admin">>]}}),
+refresh_validate_doc_funs(Db0) ->
+    Db = Db0#db{user_ctx = #user_ctx{roles=[<<"_admin">>]}},
+    DesignDocs = couch_db:get_design_docs(Db),
     ProcessDocFuns = lists:flatmap(
-        fun(DesignDoc) ->
+        fun(DesignDocInfo) ->
+            {ok, DesignDoc} = couch_db:open_doc_int(
+                Db, DesignDocInfo, [ejson_body]),
             case couch_doc:get_validate_doc_fun(DesignDoc) of
             nil -> [];
             Fun -> [Fun]
             end
         end, DesignDocs),
-    Db#db{validate_doc_funs=ProcessDocFuns}.
+    Db0#db{validate_doc_funs=ProcessDocFuns}.
 
 % rev tree functions
 
@@ -574,16 +576,16 @@ merge_rev_trees(_Limit, _Merge, [], [], AccNewInfos, AccRemoveSeqs, AccSeq) ->
     {ok, lists:reverse(AccNewInfos), AccRemoveSeqs, AccSeq};
 merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
         [OldDocInfo|RestOldInfo], AccNewInfos, AccRemoveSeqs, AccSeq) ->
-    #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted,update_seq=OldSeq}
+    #full_doc_info{id=Id,rev_tree=OldTree,deleted=OldDeleted0,update_seq=OldSeq}
             = OldDocInfo,
-    NewRevTree = lists:foldl(
-        fun({Client, {#doc{revs={Pos,[_Rev|PrevRevs]}}=NewDoc, Ref}}, AccTree) ->
+    {NewRevTree, _} = lists:foldl(
+        fun({Client, {#doc{revs={Pos,[_Rev|PrevRevs]}}=NewDoc, Ref}}, {AccTree, OldDeleted}) ->
             if not MergeConflicts ->
                 case couch_key_tree:merge(AccTree, couch_doc:to_path(NewDoc),
                     Limit) of
                 {_NewTree, conflicts} when (not OldDeleted) ->
                     send_result(Client, Ref, conflict),
-                    AccTree;
+                    {AccTree, OldDeleted};
                 {NewTree, conflicts} when PrevRevs /= [] ->
                     % Check to be sure if prev revision was specified, it's
                     % a leaf node in the tree
@@ -592,10 +594,10 @@ merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
                             {LeafPos, LeafRevId} == {Pos-1, hd(PrevRevs)}
                         end, Leafs),
                     if IsPrevLeaf ->
-                        NewTree;
+                        {NewTree, OldDeleted};
                     true ->
                         send_result(Client, Ref, conflict),
-                        AccTree
+                        {AccTree, OldDeleted}
                     end;
                 {NewTree, no_conflicts} when  AccTree == NewTree ->
                     % the tree didn't change at all
@@ -614,21 +616,21 @@ merge_rev_trees(Limit, MergeConflicts, [NewDocs|RestDocsList],
                                 couch_doc:to_path(NewDoc2), Limit),
                         % we changed the rev id, this tells the caller we did
                         send_result(Client, Ref, {ok, {OldPos + 1, NewRevId}}),
-                        NewTree2;
+                        {NewTree2, OldDeleted};
                     true ->
                         send_result(Client, Ref, conflict),
-                        AccTree
+                        {AccTree, OldDeleted}
                     end;
                 {NewTree, _} ->
-                    NewTree
+                    {NewTree, NewDoc#doc.deleted}
                 end;
             true ->
                 {NewTree, _} = couch_key_tree:merge(AccTree,
                             couch_doc:to_path(NewDoc), Limit),
-                NewTree
+                {NewTree, OldDeleted}
             end
         end,
-        OldTree, NewDocs),
+        {OldTree, OldDeleted0}, NewDocs),
     if NewRevTree == OldTree ->
         % nothing changed
         merge_rev_trees(Limit, MergeConflicts, RestDocsList, RestOldInfo,
@@ -968,7 +970,7 @@ copy_compact(Db, NewDb0, Retry) ->
 start_copy_compact(#db{name=Name,filepath=Filepath,header=#db_header{purge_seq=PurgeSeq}}=Db) ->
     CompactFile = Filepath ++ ".compact",
     ?LOG_DEBUG("Compaction process spawned for db \"~s\"", [Name]),
-    case couch_file:open(CompactFile) of
+    case couch_file:open(CompactFile, [nologifmissing]) of
     {ok, Fd} ->
         Retry = true,
         case couch_file:read_header(Fd) of

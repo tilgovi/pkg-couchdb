@@ -41,59 +41,79 @@ EXTRA_DIST = \
     LICENSE \
     NEWS \
     NOTICE \
-    README \
+    README.rst \
     THANKS \
+    build-aux/dist-error \
+    build-aux/sphinx-build \
+    build-aux/sphinx-touch \
     license.skip
 
-AUTHORS.gz: $(top_srcdir)/AUTHORS
-	-gzip -9 < $< > $@
+AUTHORS.gz: AUTHORS
+	gzip -9 < $< > $@
 
-BUGS.gz: $(top_srcdir)/BUGS
-	-gzip -9 < $< > $@
+BUGS.gz: BUGS
+	gzip -9 < $< > $@
 
-CHANGES.gz: $(top_srcdir)/CHANGES
-	-gzip -9 < $< > $@
+CHANGES.gz: CHANGES
+	gzip -9 < $< > $@
 
-DEVELOPERS.gz: $(top_srcdir)/DEVELOPERS
-	-gzip -9 < $< > $@
+DEVELOPERS.gz: DEVELOPERS
+	gzip -9 < $< > $@
 
-INSTALL.gz: $(top_srcdir)/INSTALL
-	-gzip -9 < $< > $@
+INSTALL.gz: INSTALL
+	gzip -9 < $< > $@
 
-INSTALL.Unix.gz: $(top_srcdir)/INSTALL.Unix
-	-gzip -9 < $< > $@
+INSTALL.Unix.gz: INSTALL.Unix
+	gzip -9 < $< > $@
 
-INSTALL.Windows.gz: $(top_srcdir)/INSTALL.Windows
-	-gzip -9 < $< > $@
+INSTALL.Windows.gz: INSTALL.Windows
+	gzip -9 < $< > $@
 
-LICENSE.gz: $(top_srcdir)/LICENSE
-	-gzip -9 < $< > $@
+LICENSE.gz: LICENSE
+	gzip -9 < $< > $@
 
-NEWS.gz: $(top_srcdir)/NEWS
-	-gzip -9 < $< > $@
+NEWS.gz: NEWS
+	gzip -9 < $< > $@
 
-NOTICE.gz: $(top_srcdir)/NOTICE
-	-gzip -9 < $< > $@
+NOTICE.gz: NOTICE
+	gzip -9 < $< > $@
 
-README.gz: $(top_srcdir)/README
-	-gzip -9 < $< > $@
+README.gz: README.rst
+	gzip -9 < $< > $@
 
-THANKS.gz: $(top_srcdir)/THANKS
-	-gzip -9 < $< > $@
+THANKS.gz: THANKS
+	gzip -9 < $< > $@
 
-check: dev
-	$(top_builddir)/test/etap/run
+check: dev check-js
+if TESTS
+	$(top_builddir)/test/etap/run $(top_srcdir)/test/etap
+endif
+
+check-js: dev
+if TESTS
+if USE_CURL
+	MAKE=$(MAKE) $(top_builddir)/test/javascript/run
+endif
+endif
+
+check-etap: dev
+if TESTS
+	$(top_builddir)/test/etap/run $(top_srcdir)/test/etap
+endif
 
 cover: dev
+if TESTS
 	rm -f cover/*.coverdata
 	COVER=1 COVER_BIN=./src/couchdb/ $(top_builddir)/test/etap/run
 	SRC=./src/couchdb/ \
 	    $(ERL) -noshell \
-		-pa src/etap \
-		-eval 'etap_report:create()' \
+	    -pa src/etap \
+	    -eval 'etap_report:create()' \
 	    -s init stop > /dev/null 2>&1
+endif
 
 dev: all
+if TESTS
 	@echo "This command is intended for developers to use;"
 	@echo "it creates development ini files as well as a"
 	@echo "$(top_builddir)/tmp structure for development runtime files."
@@ -103,6 +123,7 @@ dev: all
 	mkdir -p $(top_builddir)/tmp/lib
 	mkdir -p $(top_builddir)/tmp/log
 	mkdir -p $(top_builddir)/tmp/run/couchdb
+endif
 
 install-data-hook:
 	@echo
@@ -112,6 +133,8 @@ distclean-local:
 	rm -fr $(top_builddir)/etc/couchdb/default.d
 	rm -fr $(top_builddir)/etc/couchdb/local.d
 	rm -fr $(top_builddir)/tmp
+	rm -f  $(top_builddir)/couchdb.stdout
+	rm -f  $(top_builddir)/couchdb.stderr
 
 .PHONY: local-clean
 local-clean: maintainer-clean
@@ -132,18 +155,9 @@ dist-hook:
 	find $(top_builddir) -type f -name "._*" -exec rm -f {} \;
 
 distcheck-hook:
+	$(MAKE) -C bin distcheck-hook
+	$(MAKE) -C src/couchdb/priv distcheck-hook
+	$(MAKE) -C share/doc/build distcheck-hook
 	grep -rL 'http://www.apache.org/licenses/LICENSE-2.0' * \
-            | grep -vEf license.skip; \
-        test "$$?" -eq 1
-
-.PHONY: distsign
-distsign: distcheck check
-	@# @@ unpack archive and run diff -r to double check missing files
-	@# @@ does automake have anything that does this?
-	gpg --armor --detach-sig --default-key 8FBFCFBF \
-	    < $(top_srcdir)/$(distdir).tar.gz \
-	    > $(top_srcdir)/$(distdir).tar.gz.asc
-	md5sum $(top_srcdir)/$(distdir).tar.gz \
-	    > $(top_srcdir)/$(distdir).tar.gz.md5
-	sha1sum $(top_srcdir)/$(distdir).tar.gz \
-	    > $(top_srcdir)/$(distdir).tar.gz.sha
+	    | grep --include= -vEf $(top_srcdir)/license.skip; \
+	    test "$$?" -eq 1

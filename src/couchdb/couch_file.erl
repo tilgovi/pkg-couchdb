@@ -29,7 +29,7 @@
 -export([append_raw_chunk/2, assemble_file_chunk/1, assemble_file_chunk/2]).
 -export([append_term/2, append_term/3, append_term_md5/2, append_term_md5/3]).
 -export([write_header/2, read_header/1]).
--export([delete/2, delete/3, init_delete_dir/1]).
+-export([delete/2, delete/3, nuke_dir/2, init_delete_dir/1]).
 
 % gen_server callbacks
 -export([init/1, terminate/2, code_change/3]).
@@ -58,8 +58,12 @@ open(Filepath, Options) ->
             {trap_exit, true} -> receive {'EXIT', Pid, _} -> ok end;
             {trap_exit, false} -> ok
             end,
-            ?LOG_DEBUG("Could not open file ~s: ~s",
-                [Filepath, file:format_error(Reason)]),
+            case {lists:member(nologifmissing, Options), Reason} of
+            {true, enoent} -> ok;
+            _ ->
+            ?LOG_ERROR("Could not open file ~s: ~s",
+                [Filepath, file:format_error(Reason)])
+            end,
             Error
         end;
     Error ->
@@ -213,6 +217,26 @@ delete(RootDir, Filepath, Async) ->
         end;
     Error ->
         Error
+    end.
+
+
+nuke_dir(RootDelDir, Dir) ->
+    FoldFun = fun(File) ->
+        Path = Dir ++ "/" ++ File,
+        case filelib:is_dir(Path) of
+            true ->
+                ok = nuke_dir(RootDelDir, Path),
+                file:del_dir(Path);
+            false ->
+                delete(RootDelDir, Path, false)
+        end
+    end,
+    case file:list_dir(Dir) of
+        {ok, Files} ->
+            lists:foreach(FoldFun, Files),
+            ok = file:del_dir(Dir);
+        {error, enoent} ->
+            ok
     end.
 
 

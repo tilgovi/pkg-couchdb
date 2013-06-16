@@ -60,6 +60,9 @@ test() ->
         "deflate"
     ),
 
+    % COUCHDB-1711 - avoid weird timng/scheduling/request handling issue
+    timer:sleep(100),
+
     test_create_already_compressed_att_with_invalid_content_encoding(
         db_url() ++ "/doc_att_compress",
         "readme.txt",
@@ -720,6 +723,6 @@ test_png_data() ->
 
 test_text_data() ->
     {ok, Data} = file:read_file(
-        test_util:source_file("README")
+        test_util:source_file("README.rst")
     ),
     Data.

@@ -139,7 +139,7 @@
      */
     session: function(options) {
       options = options || {};
-      $.ajax({
+      ajax({
         type: "GET", url: this.urlPrefix + "/_session",
         beforeSend: function(xhr) {
             xhr.setRequestHeader('Accept', 'application/json');
@@ -839,7 +839,8 @@
          * uploads/all/documentation/couchbase-api-design.html#couchbase-api-
          * design_db-design-designdoc-view-viewname_get">docs for /db/
          * _design/design-doc/_list/l1/v1</a>
-         * @param {String} name View to run list against
+         * @param {String} name View to run list against (string should have 
+         * the design-doc name followed by a slash and the view name)
          * @param {ajaxSettings} options <a href="http://api.jquery.com/
          * jQuery.ajax/#jQuery-ajax-settings">jQuery ajax settings</a>
          */
@@ -983,7 +984,7 @@
    * @private
    */
   function ajax(obj, options, errorMessage, ajaxOptions) {
-
+    var timeStart;
     var defaultAjaxOpts = {
       contentType: "application/json",
       headers:{"Accept": "application/json"}
@@ -992,6 +993,7 @@
     options = $.extend({successStatus: 200}, options);
     ajaxOptions = $.extend(defaultAjaxOpts, ajaxOptions);
     errorMessage = errorMessage || "Unknown error";
+    timeStart = (new Date()).getTime();
     $.ajax($.extend($.extend({
       type: "GET", dataType: "json", cache : !$.browser.msie,
       beforeSend: function(xhr){
@@ -1002,6 +1004,7 @@
         }
       },
       complete: function(req) {
+        var reqDuration = (new Date()).getTime() - timeStart;
         try {
           var resp = $.parseJSON(req.responseText);
         } catch(e) {
@@ -1016,11 +1019,12 @@
           options.ajaxStart(resp);
         }
         if (req.status == options.successStatus) {
-          if (options.beforeSuccess) options.beforeSuccess(req, resp);
-          if (options.success) options.success(resp);
+          if (options.beforeSuccess) options.beforeSuccess(req, resp, reqDuration);
+          if (options.success) options.success(resp, reqDuration);
         } else if (options.error) {
           options.error(req.status, resp && resp.error ||
-                        errorMessage, resp && resp.reason || "no response");
+                        errorMessage, resp && resp.reason || "no response",
+                        reqDuration);
         } else {
           throw errorMessage + ": " + resp.reason;
         }

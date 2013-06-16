@@ -41,7 +41,7 @@ save_to_file({{Section, Key}, Value}, File) ->
     ok ->
         ok;
     {error, Reason} = Error ->
-        ?LOG_ERROR("Couldn't write config file ~s: ~s",
+        ?LOG_ERROR("Could not write config file ~s: ~s",
             [File, file:format_error(Reason)]),
         Error
     end.

@@ -21,6 +21,8 @@
 % the lowest possible database sequence number
 -define(LOWEST_SEQ, 0).
 
+-define(REWRITE_COUNT, couch_rewrite_count).
+
 -define(JSON_ENCODE(V), ejson:encode(V)).
 -define(JSON_DECODE(V), ejson:decode(V)).
 
@@ -47,6 +49,13 @@
     case couch_log:info_on() of
         true ->
             couch_log:info(Format, Args);
+        false -> ok
+    end).
+
+-define(LOG_WARN(Format, Args),
+    case couch_log:warn_on() of
+        true ->
+            couch_log:warn(Format, Args);
         false -> ok
     end).
 
@@ -234,34 +243,9 @@
     stop = false,
     data = <<>>,
     ctype = "application/json",
-    headers = []
+    headers = [],
+    json = nil
 }).
-
--record(group, {
-    sig=nil,
-    fd=nil,
-    name,
-    def_lang,
-    design_options=[],
-    views,
-    lib,
-    id_btree=nil,
-    current_seq=0,
-    purge_seq=0,
-    query_server=nil,
-    waiting_delayed_commit=nil
-    }).
-
--record(view,
-    {id_num,
-    update_seq=0,
-    purge_seq=0,
-    map_names=[],
-    def,
-    btree=nil,
-    reduce_funs=[],
-    options=[]
-    }).
 
 -record(index_header,
     {seq=0,
