@@ -104,6 +104,17 @@ stop_couchdb () {
     # Stop the running Apache CouchDB process.
 
     run_command "$COUCHDB -d" > /dev/null
+    RET=1;
+    for i in $(seq 1 30); do
+        status=`$COUCHDB -s 2>/dev/null | grep -c process`;
+        if [ "$status" -eq 0 ]; then
+            RET=0;
+            break;
+        fi;
+        echo -n .;
+        sleep 1s;
+    done;
+    return $RET
 }
 
 display_status () {
