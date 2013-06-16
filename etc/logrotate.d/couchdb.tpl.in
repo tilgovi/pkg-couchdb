@@ -6,4 +6,6 @@
        compress
        notifempty
        missingok
+       su couchdb couchdb
+       create 0640 couchdb couchdb
 }
