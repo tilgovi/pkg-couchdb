@@ -1,17 +1,14 @@
 Debian README
 =============
-
-Apache CouchDB is alpha software and still under heavy development. Please be
-aware that important areas such as the public API or internal database format
-may see backwards incompatible changes between versions.
-
-More detailed information can be found on the CouchDB wiki:
-
-  http://wiki.apache.org/couchdb/BreakingChanges
-
 Because the internal database format may change, rendering your database
 unusable with a new version of the package, the database directory is
 partitioned by the CouchDB release number of the database format in use.
+
+When upgrading to a new release check the release notes and the project
+wiki for information about breaking changes:
+
+  http://wiki.apache.org/couchdb/BreakingChanges
+
 
 The partitioned database directories are named like this:
 
